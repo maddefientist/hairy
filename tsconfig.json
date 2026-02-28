@@ -1,0 +1,13 @@
+{
+  "files": [],
+  "references": [
+    { "path": "packages/observability" },
+    { "path": "packages/core" },
+    { "path": "packages/providers" },
+    { "path": "packages/channels" },
+    { "path": "packages/tools" },
+    { "path": "packages/memory" },
+    { "path": "packages/growth" },
+    { "path": "apps/hairy-agent" }
+  ]
+}

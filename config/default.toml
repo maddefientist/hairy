@@ -1,0 +1,57 @@
+[agent]
+name = "Hairy"
+data_dir = "./data"
+max_iterations_per_run = 25
+max_context_tokens = 100000
+
+[health]
+port = 9090
+
+[channels.telegram]
+enabled = false
+
+[channels.whatsapp]
+enabled = false
+
+[channels.webhook]
+enabled = false
+port = 8080
+secret = ""
+
+[channels.cli]
+enabled = true
+
+[providers.anthropic]
+enabled = true
+default_model = "claude-sonnet-4-20250514"
+
+[providers.openrouter]
+enabled = false
+default_model = "anthropic/claude-sonnet-4-20250514"
+
+[providers.ollama]
+enabled = false
+base_url = "http://localhost:11434"
+default_model = "llama3.2"
+
+[routing]
+default_provider = "anthropic"
+fallback_chain = ["anthropic", "openrouter", "ollama"]
+
+[routing.cost]
+track = true
+daily_budget_usd = 10.0
+alert_threshold_pct = 80
+
+[growth]
+reflection_enabled = true
+initiative_enabled = false
+skill_auto_promote = false
+
+[tools.bash]
+timeout_ms = 30000
+max_output_bytes = 1048576
+
+[tools.sidecar]
+auto_build = true
+health_check_interval_ms = 30000

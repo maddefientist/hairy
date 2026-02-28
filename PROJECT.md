@@ -54,10 +54,11 @@ Built on patterns from `@mariozechner/pi-agent-core` and `@mariozechner/pi-ai`.
 
 ## Recent Changes
 - 2026-02-28: Initial architecture spec and Codex implementation prompt created
+- 2026-02-28: Scaffolded pnpm workspace monorepo with core packages, app wiring, sidecar examples, Docker, CI, and docs
 
 ## Next Steps
-- Scaffold the full monorepo
-- Implement Phase 1 (foundation packages)
-- Implement Phase 2 (main daemon)
-- Implement Phase 3 (sidecar examples)
-- Implement Phase 4 (Docker + CI)
+- Flesh out Telegram and WhatsApp adapters beyond stubs
+- Add robust provider streaming/tool-call handling
+- Add comprehensive unit tests for core queue/scheduler/orchestrator paths
+- Integrate real initiative scheduling flows
+- Harden sidecar sandbox/resource enforcement

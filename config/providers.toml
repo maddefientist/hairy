@@ -1,0 +1,13 @@
+[routing]
+default = "anthropic"
+
+[routing.rules]
+simple_text = { provider = "anthropic", model = "claude-sonnet-4-20250514" }
+image_input = { provider = "ollama", model = "llava" }
+long_context = { provider = "openrouter", model = "anthropic/claude-sonnet-4-20250514" }
+complex = { provider = "anthropic", model = "claude-sonnet-4-20250514" }
+
+[routing.fallback]
+chain = ["anthropic", "openrouter", "ollama"]
+retry_on = ["rate_limit", "server_error", "timeout"]
+max_retries = 3

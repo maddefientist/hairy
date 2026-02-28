@@ -1,0 +1,14 @@
+[permissions.bash]
+allowed_commands = ["ls", "grep", "find", "git", "pnpm", "node"]
+blocked_commands = ["sudo", "rm", "mkfs"]
+require_approval_for = ["npm install", "pnpm add", "apt"]
+max_output_bytes = 1048576
+
+[permissions.write]
+allowed_paths = ["./"]
+blocked_paths = ["/etc", "/usr", "~/.ssh", "~/.aws"]
+
+[permissions.sidecar]
+max_memory_mb = 512
+max_cpu_pct = 50
+network_access = false

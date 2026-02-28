@@ -1,0 +1,17 @@
+version: "3.9"
+services:
+  hairy-agent:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    environment:
+      HAIRY_HEALTH_PORT: 9090
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      WEBHOOK_SECRET: ${WEBHOOK_SECRET:-}
+    ports:
+      - "9090:9090"
+      - "8080:8080"
+    volumes:
+      - ../data:/app/data
+    restart: unless-stopped

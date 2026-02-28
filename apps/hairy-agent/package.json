@@ -1,0 +1,26 @@
+{
+  "name": "hairy-agent",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "./dist/main.js",
+  "types": "./dist/main.d.ts",
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "clean": "rm -rf dist",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest --run --passWithNoTests",
+    "dev": "tsx src/main.ts"
+  },
+  "dependencies": {
+    "@hairy/channels": "workspace:*",
+    "@hairy/core": "workspace:*",
+    "@hairy/growth": "workspace:*",
+    "@hairy/memory": "workspace:*",
+    "@hairy/observability": "workspace:*",
+    "@hairy/providers": "workspace:*",
+    "@hairy/tools": "workspace:*",
+    "@hono/node-server": "^1.13.8",
+    "hono": "^4.7.4",
+    "zod": "^3.24.2"
+  }
+}
