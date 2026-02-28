@@ -15,7 +15,7 @@ import {
   TaskQueue,
   runAgentLoop,
 } from "@hairy/core";
-import { InitiativeEngine } from "@hairy/growth";
+import { EvalHarness, InitiativeEngine, SkillRegistry } from "@hairy/growth";
 import {
   ConversationMemory,
   EpisodicMemory,
@@ -50,27 +50,18 @@ const buildProviders = (keys: {
   openrouter?: string;
 }): Provider[] => {
   const providers: Provider[] = [];
-  if (keys.anthropic) {
-    providers.push(createAnthropicProvider({ apiKey: keys.anthropic }));
-  }
-  if (keys.openrouter) {
-    providers.push(createOpenRouterProvider({ apiKey: keys.openrouter }));
-  }
+  if (keys.anthropic) providers.push(createAnthropicProvider({ apiKey: keys.anthropic }));
+  if (keys.openrouter) providers.push(createOpenRouterProvider({ apiKey: keys.openrouter }));
   return providers;
 };
 
-/** Convert a Tool (with Zod schema) to a ToolDefinition (JSON schema) for the LLM */
+/** Convert a Tool (Zod schema) → AgentLoopToolDef (JSON schema) for the LLM */
 const toolToDefinition = (tool: Tool): AgentLoopToolDef => {
-  // Extract JSON schema from Zod — use .describe() output shape
-  // Zod's .shape gives us the raw shape, but for the LLM we need a
-  // simplified JSON schema representation
-  const zodSchema = tool.parameters;
   let jsonSchema: Record<string, unknown> = {};
 
   try {
-    // Try zod-to-json-schema if available, otherwise build from description
-    if ("_def" in zodSchema) {
-      const def = zodSchema._def as {
+    if ("_def" in tool.parameters) {
+      const def = tool.parameters._def as {
         typeName?: string;
         shape?: () => Record<string, { _def?: { typeName?: string; description?: string } }>;
       };
@@ -83,9 +74,7 @@ const toolToDefinition = (tool: Tool): AgentLoopToolDef => {
           const fieldDef = fieldSchema?._def as {
             typeName?: string;
             description?: string;
-            innerType?: {
-              _def?: { typeName?: string; description?: string };
-            };
+            innerType?: { _def?: { typeName?: string } };
           };
 
           let fieldType = "string";
@@ -93,9 +82,9 @@ const toolToDefinition = (tool: Tool): AgentLoopToolDef => {
 
           if (fieldDef?.typeName === "ZodOptional") {
             isOptional = true;
-            const innerTypeName = fieldDef.innerType?._def?.typeName;
-            if (innerTypeName === "ZodNumber") fieldType = "number";
-            else if (innerTypeName === "ZodBoolean") fieldType = "boolean";
+            const inner = fieldDef.innerType?._def?.typeName;
+            if (inner === "ZodNumber") fieldType = "number";
+            else if (inner === "ZodBoolean") fieldType = "boolean";
           } else if (fieldDef?.typeName === "ZodNumber") {
             fieldType = "number";
           } else if (fieldDef?.typeName === "ZodBoolean") {
@@ -106,52 +95,53 @@ const toolToDefinition = (tool: Tool): AgentLoopToolDef => {
             type: fieldType,
             ...(fieldDef?.description ? { description: fieldDef.description } : {}),
           };
-
-          if (!isOptional) {
-            required.push(key);
-          }
+          if (!isOptional) required.push(key);
         }
 
         jsonSchema = { properties, required };
       }
     }
   } catch {
-    // Fallback: empty properties
     jsonSchema = { properties: {} };
   }
 
-  return {
-    name: tool.name,
-    description: tool.description,
-    parameters: jsonSchema,
-  };
+  return { name: tool.name, description: tool.description, parameters: jsonSchema };
 };
 
 const main = async (): Promise<void> => {
   const config = await loadHairyConfig();
   const metrics = new Metrics();
 
-  // --- Data stores ---
+  // ── Data stores ─────────────────────────────────────────────────────────
   const queue = new TaskQueue(join(config.dataDir, "tasks", "queue.json"));
   const scheduler = new Scheduler({
     dataPath: join(config.dataDir, "tasks", "tasks.json"),
-    onTaskDue: async (_task: ScheduledTask) => {
+    onTaskDue: async (task: ScheduledTask) => {
       metrics.increment("scheduled_tasks_due");
+      logger.info({ taskId: task.id, prompt: task.prompt }, "scheduled task due");
+      // Initiative-generated tasks are dispatched via the engine below
     },
   });
   await scheduler.load();
 
-  // --- Memory ---
+  // ── Memory ───────────────────────────────────────────────────────────────
   const conversation = new ConversationMemory({
     filePath: join(config.dataDir, "context.jsonl"),
   });
   const semantic = new SemanticMemory({
     filePath: join(config.dataDir, "memory", "semantic.json"),
+    hiveApiUrl: process.env.HARI_HIVE_URL,
   });
   const episodic = new EpisodicMemory({ dataDir: config.dataDir });
   const reflection = new ReflectionEngine(semantic);
 
-  // --- Tools ---
+  // ── Growth ───────────────────────────────────────────────────────────────
+  const skills = new SkillRegistry({ dataDir: config.dataDir });
+  const evalHarness = new EvalHarness();
+  const promptVersions = join(config.dataDir, "memory", "prompt-versions.json");
+  void promptVersions; // Used later for PromptVersionManager if needed
+
+  // ── Tools ────────────────────────────────────────────────────────────────
   const registry = new ToolRegistry({ logger });
   registry.register(createBashTool());
   registry.register(createReadTool());
@@ -159,10 +149,9 @@ const main = async (): Promise<void> => {
   registry.register(createEditTool());
   registry.register(createWebSearchTool());
 
-  // Build tool definitions for the LLM
   const toolDefs = registry.list().map(toolToDefinition);
 
-  // --- Providers ---
+  // ── Providers ────────────────────────────────────────────────────────────
   const providers = buildProviders(config.providerApiKeys);
   const gateway = new ProviderGateway({
     providers,
@@ -173,13 +162,7 @@ const main = async (): Promise<void> => {
     metrics,
   });
 
-  // --- System prompt ---
-  const systemPrompt = await buildSystemPrompt({
-    dataDir: config.dataDir,
-    toolDescriptions: toolDefs.map((t) => `- ${t.name}: ${t.description}`),
-  });
-
-  // --- Channel adapters ---
+  // ── Channels ─────────────────────────────────────────────────────────────
   const channelAdapters: ChannelAdapter[] = [createCliAdapter()];
 
   if (config.channels.telegramToken) {
@@ -211,7 +194,7 @@ const main = async (): Promise<void> => {
     );
   }
 
-  // --- Orchestrator with agent loop ---
+  // ── Orchestrator ─────────────────────────────────────────────────────────
   const orchestrator = new Orchestrator({
     logger,
     metrics,
@@ -219,37 +202,34 @@ const main = async (): Promise<void> => {
     handleRun: async (message, traceId) => {
       await conversation.append(message);
 
-      const prompt = message.content.text ?? "";
+      // Build system prompt with active (promoted) skill fragments
+      const skillFragments = await skills.getPromptFragments();
+      const systemPrompt = await buildSystemPrompt({
+        dataDir: config.dataDir,
+        toolDescriptions: toolDefs.map((t) => `- ${t.name}: ${t.description}`),
+        skillFragments,
+        channel: message.channelType,
+      });
 
-      // Build initial messages for the agent loop
       const loopMessages: AgentLoopMessage[] = [
-        {
-          role: "user",
-          content: [{ type: "text", text: prompt }],
-        },
+        { role: "user", content: [{ type: "text", text: message.content.text ?? "" }] },
       ];
 
-      // Run the agent loop (multi-turn tool calling)
+      const startedAt = Date.now();
       const result = await runAgentLoop(loopMessages, {
         provider: {
           stream: (msgs, streamOpts) =>
-            gateway.stream(msgs, {
-              ...streamOpts,
-              route: { intent: "complex" },
-            }),
+            gateway.stream(msgs, { ...streamOpts, route: { intent: "complex" } }),
         },
         executor: async (name, args, _callId) => {
-          const toolResult = await registry.execute(name, args, {
+          const r = await registry.execute(name, args, {
             traceId,
             cwd: process.cwd(),
             dataDir: config.dataDir,
             logger,
             channelId: message.channelId,
           });
-          return {
-            content: toolResult.content,
-            isError: toolResult.isError ?? false,
-          };
+          return { content: r.content, isError: r.isError ?? false };
         },
         streamOpts: {
           model: "claude-sonnet-4-20250514",
@@ -264,6 +244,28 @@ const main = async (): Promise<void> => {
 
       const responseText = result.text || "I could not produce a response.";
       const response = { text: responseText };
+      const durationMs = Date.now() - startedAt;
+
+      // Score the run for eval / skill promotion
+      const evalScore = evalHarness.score({
+        traceId,
+        response,
+        stopReason: "completed",
+        toolCalls: result.toolCalls,
+        usage: {
+          input: result.totalUsage.input,
+          output: result.totalUsage.output,
+          cacheRead: 0,
+          cacheWrite: 0,
+          cost: { input: 0, output: 0, total: result.totalUsage.costUsd },
+        },
+        durationMs,
+      });
+
+      logger.info(
+        { traceId, evalScore: evalScore.score, iterations: result.iterations },
+        "run scored",
+      );
 
       // Update memory
       await conversation.append({
@@ -279,6 +281,8 @@ const main = async (): Promise<void> => {
           channelId: message.channelId,
           toolCalls: result.toolCalls.length,
           iterations: result.iterations,
+          evalScore: evalScore.score,
+          durationMs,
         },
       });
       await reflection.reflect({
@@ -292,13 +296,9 @@ const main = async (): Promise<void> => {
             output: result.totalUsage.output,
             cacheRead: 0,
             cacheWrite: 0,
-            cost: {
-              input: 0,
-              output: 0,
-              total: result.totalUsage.costUsd,
-            },
+            cost: { input: 0, output: 0, total: result.totalUsage.costUsd },
           },
-          durationMs: 0,
+          durationMs,
         },
         userMessage: message,
       });
@@ -307,14 +307,20 @@ const main = async (): Promise<void> => {
     },
   });
 
-  // --- Initiative engine ---
+  // ── Initiative engine ────────────────────────────────────────────────────
   const initiative = new InitiativeEngine({
     rules: [],
     scheduler,
     channels: channelAdapters,
+    logger,
   });
 
-  // --- Connect channels ---
+  // Give the initiative engine a dispatch path into the orchestrator
+  initiative.onProactiveMessage((msg) => {
+    void orchestrator.handleMessage(msg);
+  });
+
+  // ── Connect channels ─────────────────────────────────────────────────────
   for (const channel of channelAdapters) {
     channel.onMessage((msg) => {
       void orchestrator.handleMessage(msg);
@@ -322,15 +328,11 @@ const main = async (): Promise<void> => {
     await channel.connect();
   }
 
-  // --- Sidecars ---
-  const sidecars = new SidecarManager({
-    logger,
-    registry,
-    autoBuild: true,
-  });
+  // ── Sidecars ─────────────────────────────────────────────────────────────
+  const sidecars = new SidecarManager({ logger, registry, autoBuild: true });
   await sidecars.loadAll(join(process.cwd(), "sidecars"));
 
-  // --- Health server ---
+  // ── Health server ─────────────────────────────────────────────────────────
   const health = new HealthServer({
     port: config.healthPort,
     metrics,
@@ -342,6 +344,7 @@ const main = async (): Promise<void> => {
       })),
       providers: providers.map((p) => p.name),
       sidecars: sidecars.health(),
+      eval: evalHarness.getScores().slice(-10),
     }),
   });
 
@@ -349,12 +352,10 @@ const main = async (): Promise<void> => {
   await initiative.start();
   await health.start();
 
-  // --- Shutdown ---
+  // ── Shutdown ──────────────────────────────────────────────────────────────
   const shutdown = async (): Promise<void> => {
     logger.info("shutting down hairy-agent");
-    for (const ch of channelAdapters) {
-      await ch.disconnect();
-    }
+    for (const ch of channelAdapters) await ch.disconnect();
     await scheduler.stopAll();
     await initiative.stop();
     await sidecars.stopAll();
@@ -363,12 +364,8 @@ const main = async (): Promise<void> => {
     process.exit(0);
   };
 
-  process.on("SIGINT", () => {
-    void shutdown();
-  });
-  process.on("SIGTERM", () => {
-    void shutdown();
-  });
+  process.on("SIGINT", () => void shutdown());
+  process.on("SIGTERM", () => void shutdown());
 
   logger.info(
     {

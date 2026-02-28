@@ -41,17 +41,21 @@ export class SemanticMemory {
 
   async store(content: string, tags: string[] = []): Promise<string> {
     if (this.opts.hiveApiUrl) {
-      const response = await fetch(`${this.opts.hiveApiUrl}/knowledge`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ content, tags }),
-      });
+      try {
+        const response = await fetch(`${this.opts.hiveApiUrl}/knowledge`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ content, tags }),
+        });
 
-      if (response.ok) {
-        const payload = (await response.json()) as { id?: string };
-        if (payload.id) {
-          return payload.id;
+        if (response.ok) {
+          const payload = (await response.json()) as { id?: string };
+          if (payload.id) {
+            return payload.id;
+          }
         }
+      } catch {
+        // Hive unavailable — fall through to local storage
       }
     }
 
@@ -69,15 +73,19 @@ export class SemanticMemory {
 
   async search(query: string, topK = 5): Promise<SearchResult[]> {
     if (this.opts.hiveApiUrl) {
-      const response = await fetch(`${this.opts.hiveApiUrl}/search`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ query, topK }),
-      });
+      try {
+        const response = await fetch(`${this.opts.hiveApiUrl}/search`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ query, topK }),
+        });
 
-      if (response.ok) {
-        const payload = (await response.json()) as { items?: SearchResult[] };
-        return payload.items ?? [];
+        if (response.ok) {
+          const payload = (await response.json()) as { items?: SearchResult[] };
+          return payload.items ?? [];
+        }
+      } catch {
+        // Hive unavailable — fall through to local search
       }
     }
 
