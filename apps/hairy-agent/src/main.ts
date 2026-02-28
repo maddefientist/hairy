@@ -4,6 +4,7 @@ import {
   createCliAdapter,
   createTelegramAdapter,
   createWebhookAdapter,
+  createWhatsAppAdapter,
 } from "@hairy/channels";
 import {
   type AgentLoopMessage,
@@ -196,6 +197,16 @@ const main = async (): Promise<void> => {
       createWebhookAdapter({
         port: Number(process.env.WEBHOOK_PORT ?? 8080),
         secret: config.channels.webhookSecret,
+      }),
+    );
+  }
+
+  if (process.env.WHATSAPP_ENABLED === "true") {
+    channelAdapters.push(
+      createWhatsAppAdapter({
+        sessionDir: join(config.dataDir, "whatsapp-session"),
+        allowedJids: process.env.WHATSAPP_ALLOWED_JIDS?.split(",").map((j) => j.trim()),
+        logger,
       }),
     );
   }
