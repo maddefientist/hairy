@@ -4,4 +4,5 @@ export * from "./gateway.js";
 export * from "./anthropic.js";
 export * from "./openrouter.js";
 export * from "./ollama.js";
+export * from "./gemini.js";
 export * from "./pi-ai-bridge.js";

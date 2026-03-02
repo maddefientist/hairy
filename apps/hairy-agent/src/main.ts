@@ -28,6 +28,8 @@ import {
   type Provider,
   ProviderGateway,
   createAnthropicProvider,
+  createGeminiProvider,
+  createOllamaProvider,
   createOpenRouterProvider,
 } from "@hairy/providers";
 import {
@@ -46,13 +48,16 @@ import { buildSystemPrompt } from "./identity.js";
 
 const logger = createLogger("hairy-agent");
 
-const buildProviders = (keys: {
-  anthropic?: string;
-  openrouter?: string;
-}): Provider[] => {
+const buildProviders = (
+  keys: { anthropic?: string; openrouter?: string; gemini?: string },
+  ollamaBaseUrl?: string,
+): Provider[] => {
   const providers: Provider[] = [];
   if (keys.anthropic) providers.push(createAnthropicProvider({ apiKey: keys.anthropic }));
   if (keys.openrouter) providers.push(createOpenRouterProvider({ apiKey: keys.openrouter }));
+  if (keys.gemini) providers.push(createGeminiProvider({ apiKey: keys.gemini }));
+  // Ollama always available — fails gracefully if unreachable
+  providers.push(createOllamaProvider({ baseUrl: ollamaBaseUrl }));
   return providers;
 };
 
@@ -156,7 +161,7 @@ const main = async (): Promise<void> => {
   const toolDefs = registry.list().map(toolToDefinition);
 
   // ── Providers ────────────────────────────────────────────────────────────
-  const providers = buildProviders(config.providerApiKeys);
+  const providers = buildProviders(config.providerApiKeys, config.ollamaBaseUrl);
   const gateway = new ProviderGateway({
     providers,
     routingConfig: {

@@ -2,12 +2,16 @@
 default = "anthropic"
 
 [routing.rules]
-simple_text = { provider = "anthropic", model = "claude-sonnet-4-20250514" }
-image_input = { provider = "ollama", model = "llava" }
-long_context = { provider = "openrouter", model = "anthropic/claude-sonnet-4-20250514" }
-complex = { provider = "anthropic", model = "claude-sonnet-4-20250514" }
+# Route by task intent — override per-deployment as needed
+simple_text  = { provider = "anthropic", model = "claude-haiku-3-5-20241022" }
+image_input  = { provider = "anthropic", model = "claude-sonnet-4-20250514" }
+long_context = { provider = "gemini",    model = "gemini-2.5-pro" }
+complex      = { provider = "anthropic", model = "claude-sonnet-4-20250514" }
+
+# Local / privacy-sensitive tasks — route to Ollama
+local        = { provider = "ollama",    model = "llama3.1" }
 
 [routing.fallback]
-chain = ["anthropic", "openrouter", "ollama"]
-retry_on = ["rate_limit", "server_error", "timeout"]
+chain      = ["anthropic", "gemini", "openrouter", "ollama"]
+retry_on   = ["rate_limit", "server_error", "timeout"]
 max_retries = 3
