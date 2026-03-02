@@ -1,7 +1,7 @@
 # Hairy Framework — Handover Document
 
-**Project Status:** Phase 1–2 Complete (Scaffolding Done)  
-**Last Updated:** 2026-02-28  
+**Project Status:** Phase 1–2 Complete + Core Agent Loop Implemented  
+**Last Updated:** 2026-02-28 (session 3)  
 **Next Handler:** [Next LLM/Developer]
 
 ---
@@ -10,7 +10,7 @@
 
 **Hairy** is a reusable TypeScript framework for building autonomous, self-improving agents that run 24/7, connect via multiple channels (CLI, Telegram, WhatsApp, webhooks), reason with LLMs, execute tools, remember interactions, and extend via sidecars.
 
-**Completeness:** ~70% of Phase 1–2 (scaffold + wiring). Production-ready for MVP; needs functional channel adapters and tool-calling polish.
+**Completeness:** ~90% of Phase 1–2. Fully functional MVP: multi-turn agent loop, tool calling, Telegram, WhatsApp, skill system, eval harness — all wired and tested. 96 tests passing.
 
 ---
 
@@ -28,7 +28,7 @@
 - [x] **observability**: Logger (pino), Metrics (counters/gauges), Tracer (trace context + spans)
 - [x] **core**: TaskQueue (priority-based, persistent), Scheduler (cron/interval/once via croner), Orchestrator (main loop)
 - [x] **providers**: ProviderGateway, ModelRouter, Anthropic/OpenRouter/Ollama implementations, pi-ai bridge
-- [x] **channels**: Base adapter, CLI (working), Webhook (working), Telegram (type-safe stub), WhatsApp (type-safe stub)
+- [x] **channels**: Base adapter, CLI (working), Webhook (working), Telegram (**grammY, fully working**), WhatsApp (**Baileys, fully working**)
 - [x] **tools**: Registry with timeout/validation, bash/read/write/edit/web-search tools, SidecarManager + SidecarConnection
 - [x] **memory**: ConversationMemory (windowed JSONL), SemanticMemory (local + hari-hive bridge), EpisodicMemory (daily logs), ReflectionEngine
 - [x] **growth**: SkillRegistry, PromptVersionManager, InitiativeEngine, EvalHarness

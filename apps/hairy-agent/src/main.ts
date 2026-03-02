@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { join } from "node:path";
 import {
   type ChannelAdapter,
@@ -15,7 +16,7 @@ import {
   TaskQueue,
   runAgentLoop,
 } from "@hairy/core";
-import { EvalHarness, InitiativeEngine, SkillRegistry } from "@hairy/growth";
+import { EvalHarness, InitiativeEngine, PromptVersionManager, SkillRegistry } from "@hairy/growth";
 import {
   ConversationMemory,
   EpisodicMemory,
@@ -138,8 +139,11 @@ const main = async (): Promise<void> => {
   // ── Growth ───────────────────────────────────────────────────────────────
   const skills = new SkillRegistry({ dataDir: config.dataDir });
   const evalHarness = new EvalHarness();
-  const promptVersions = join(config.dataDir, "memory", "prompt-versions.json");
-  void promptVersions; // Used later for PromptVersionManager if needed
+  const promptVersions = new PromptVersionManager({
+    filePath: join(config.dataDir, "memory", "prompt-versions.json"),
+  });
+  /** Track last-saved hash so we only persist when the prompt changes */
+  let lastPromptHash = "";
 
   // ── Tools ────────────────────────────────────────────────────────────────
   const registry = new ToolRegistry({ logger });
@@ -210,6 +214,14 @@ const main = async (): Promise<void> => {
         skillFragments,
         channel: message.channelType,
       });
+
+      // Persist the system prompt whenever it changes (deduped by hash)
+      const currentHash = createHash("sha256").update(systemPrompt).digest("hex");
+      if (currentHash !== lastPromptHash) {
+        lastPromptHash = currentHash;
+        const saved = await promptVersions.save(systemPrompt);
+        logger.debug({ versionId: saved.id }, "new prompt version saved");
+      }
 
       const loopMessages: AgentLoopMessage[] = [
         { role: "user", content: [{ type: "text", text: message.content.text ?? "" }] },
