@@ -3,33 +3,119 @@ import { resolve } from "node:path";
 import { loadConfig } from "@hairy/core";
 import { z } from "zod";
 
+const parseBooleanEnv = (value: string | undefined): boolean | undefined => {
+  if (value === undefined) return undefined;
+  if (value.toLowerCase() === "true") return true;
+  if (value.toLowerCase() === "false") return false;
+  return undefined;
+};
+
+const toList = (value: string | undefined): string[] | undefined => {
+  if (!value) return undefined;
+  const items = value
+    .split(",")
+    .map((item) => item.trim())
+    .filter((item) => item.length > 0);
+  return items.length > 0 ? items : undefined;
+};
+
+const parseIntegerEnv = (value: string | undefined): number | undefined => {
+  if (!value) return undefined;
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed <= 0) {
+    return undefined;
+  }
+  return parsed;
+};
+
 const runtimeSchema = z.object({
   providerApiKeys: z.object({
     anthropic: z.string().optional(),
     openrouter: z.string().optional(),
     gemini: z.string().optional(),
   }),
-  ollamaBaseUrl: z.string().optional(),
+  ollama: z.object({
+    enabled: z.boolean().optional(),
+    baseUrl: z.string().url().optional(),
+    model: z.string().optional(),
+  }),
   channels: z.object({
+    telegramMode: z.enum(["bot", "mtproto"]).optional(),
     telegramToken: z.string().optional(),
+    telegramApiId: z.number().int().positive().optional(),
+    telegramApiHash: z.string().optional(),
+    telegramPhoneNumber: z.string().optional(),
+    telegramPhoneCode: z.string().optional(),
+    telegramPassword: z.string().optional(),
+    telegramSession: z.string().optional(),
+    telegramSessionFile: z.string().optional(),
+    telegramChatIds: z.array(z.string()).optional(),
     webhookSecret: z.string().optional(),
+    webhookPort: z.number().int().positive().optional(),
+    whatsappEnabled: z.boolean().optional(),
+    whatsappSessionDir: z.string().optional(),
+    whatsappAllowedJids: z.array(z.string()).optional(),
+    whatsappPairPhone: z.string().optional(),
   }),
 });
 
+interface ProviderRuntimeConfig {
+  enabled: boolean;
+  defaultModel: string;
+  apiKey?: string;
+  baseUrl?: string;
+}
+
 export interface HairyRuntimeConfig {
+  agentName: string;
   dataDir: string;
   healthPort: number;
   configDir: string;
-  providerApiKeys: {
-    anthropic?: string;
-    openrouter?: string;
-    gemini?: string;
+  maxIterationsPerRun: number;
+  providers: {
+    anthropic: ProviderRuntimeConfig;
+    openrouter: ProviderRuntimeConfig;
+    gemini: ProviderRuntimeConfig;
+    ollama: ProviderRuntimeConfig;
   };
-  /** Base URL for local Ollama instance (default: http://localhost:11434) */
-  ollamaBaseUrl?: string;
+  routing: {
+    defaultProvider: string;
+    fallbackChain: string[];
+  };
   channels: {
-    telegramToken?: string;
-    webhookSecret?: string;
+    cli: { enabled: boolean };
+    telegram: {
+      enabled: boolean;
+      mode: "bot" | "mtproto";
+      botToken?: string;
+      apiId?: number;
+      apiHash?: string;
+      phoneNumber?: string;
+      phoneCode?: string;
+      password?: string;
+      sessionString?: string;
+      sessionFile: string;
+      allowedChatIds: string[];
+    };
+    webhook: {
+      enabled: boolean;
+      secret?: string;
+      port: number;
+    };
+    whatsapp: {
+      enabled: boolean;
+      sessionDir: string;
+      allowedJids: string[];
+      pairPhone?: string;
+    };
+  };
+  growth: {
+    reflectionEnabled: boolean;
+    initiativeEnabled: boolean;
+    skillAutoPromote: boolean;
+  };
+  tools: {
+    sidecarAutoBuild: boolean;
   };
 }
 
@@ -40,39 +126,132 @@ export const loadHairyConfig = async (): Promise<HairyRuntimeConfig> => {
   }
 
   const base = await loadConfig(configDir);
+
   const runtime = runtimeSchema.parse({
     providerApiKeys: {
       anthropic: process.env.ANTHROPIC_API_KEY,
       openrouter: process.env.OPENROUTER_API_KEY,
       gemini: process.env.GEMINI_API_KEY,
     },
-    ollamaBaseUrl: process.env.OLLAMA_BASE_URL,
+    ollama: {
+      enabled: parseBooleanEnv(process.env.OLLAMA_ENABLED),
+      baseUrl: process.env.OLLAMA_BASE_URL,
+      model: process.env.OLLAMA_MODEL,
+    },
     channels: {
+      telegramMode:
+        process.env.TELEGRAM_MODE === "bot" || process.env.TELEGRAM_MODE === "mtproto"
+          ? process.env.TELEGRAM_MODE
+          : undefined,
       telegramToken: process.env.TELEGRAM_BOT_TOKEN,
+      telegramApiId: parseIntegerEnv(process.env.TELEGRAM_API_ID),
+      telegramApiHash: process.env.TELEGRAM_API_HASH,
+      telegramPhoneNumber: process.env.TELEGRAM_PHONE_NUMBER,
+      telegramPhoneCode: process.env.TELEGRAM_PHONE_CODE,
+      telegramPassword: process.env.TELEGRAM_2FA_PASSWORD,
+      telegramSession: process.env.TELEGRAM_SESSION,
+      telegramSessionFile: process.env.TELEGRAM_SESSION_FILE,
+      telegramChatIds: toList(process.env.TELEGRAM_CHAT_IDS),
       webhookSecret: process.env.WEBHOOK_SECRET,
+      webhookPort: process.env.WEBHOOK_PORT ? Number(process.env.WEBHOOK_PORT) : undefined,
+      whatsappEnabled: parseBooleanEnv(process.env.WHATSAPP_ENABLED),
+      whatsappSessionDir: process.env.WHATSAPP_SESSION_DIR,
+      whatsappAllowedJids: toList(process.env.WHATSAPP_ALLOWED_JIDS),
+      whatsappPairPhone: process.env.WHATSAPP_PAIR_PHONE,
     },
   });
 
-  const keys = runtime.providerApiKeys;
-  const hasCloudProvider =
-    Boolean(keys.anthropic) || Boolean(keys.openrouter) || Boolean(keys.gemini);
-  // Ollama is always available locally — treat as valid if base URL set or if
-  // no cloud providers are configured (assume local Ollama is running)
-  const hasOllama = Boolean(runtime.ollamaBaseUrl) || !hasCloudProvider;
+  const providers = {
+    anthropic: {
+      enabled: base.providers.anthropic?.enabled ?? false,
+      defaultModel: base.providers.anthropic?.default_model ?? "claude-sonnet-4-20250514",
+      apiKey: runtime.providerApiKeys.anthropic,
+    },
+    openrouter: {
+      enabled: base.providers.openrouter?.enabled ?? false,
+      defaultModel:
+        base.providers.openrouter?.default_model ?? "anthropic/claude-sonnet-4-20250514",
+      apiKey: runtime.providerApiKeys.openrouter,
+    },
+    gemini: {
+      enabled: base.providers.gemini?.enabled ?? false,
+      defaultModel: base.providers.gemini?.default_model ?? "gemini-2.5-flash",
+      apiKey: runtime.providerApiKeys.gemini,
+    },
+    ollama: {
+      enabled: runtime.ollama.enabled ?? base.providers.ollama?.enabled ?? false,
+      defaultModel: runtime.ollama.model ?? base.providers.ollama?.default_model ?? "llama3.2",
+      baseUrl:
+        runtime.ollama.baseUrl ?? base.providers.ollama?.base_url ?? "http://localhost:11434",
+    },
+  };
 
-  if (!hasCloudProvider && !hasOllama) {
+  const hasCloudProvider =
+    (providers.anthropic.enabled && Boolean(providers.anthropic.apiKey)) ||
+    (providers.openrouter.enabled && Boolean(providers.openrouter.apiKey)) ||
+    (providers.gemini.enabled && Boolean(providers.gemini.apiKey));
+
+  if (!hasCloudProvider && !providers.ollama.enabled) {
     throw new Error(
-      "No provider configured. Set at least one of: " +
-        "ANTHROPIC_API_KEY, OPENROUTER_API_KEY, GEMINI_API_KEY, or OLLAMA_BASE_URL",
+      "No provider configured. Enable Ollama in config/default.toml or configure cloud provider keys.",
     );
   }
 
   return {
+    agentName: base.agent.name,
     dataDir: base.agent.data_dir,
     healthPort: base.health.port,
     configDir,
-    providerApiKeys: runtime.providerApiKeys,
-    ollamaBaseUrl: runtime.ollamaBaseUrl,
-    channels: runtime.channels,
+    maxIterationsPerRun: base.agent.max_iterations_per_run,
+    providers,
+    routing: {
+      defaultProvider: base.routing.default_provider,
+      fallbackChain: base.routing.fallback_chain,
+    },
+    channels: {
+      cli: {
+        enabled: base.channels.cli.enabled,
+      },
+      telegram: {
+        enabled: base.channels.telegram.enabled,
+        mode: runtime.channels.telegramMode ?? base.channels.telegram.mode ?? "bot",
+        botToken: runtime.channels.telegramToken ?? base.channels.telegram.bot_token,
+        apiId: runtime.channels.telegramApiId,
+        apiHash: runtime.channels.telegramApiHash,
+        phoneNumber: runtime.channels.telegramPhoneNumber,
+        phoneCode: runtime.channels.telegramPhoneCode,
+        password: runtime.channels.telegramPassword,
+        sessionString: runtime.channels.telegramSession,
+        sessionFile:
+          runtime.channels.telegramSessionFile ??
+          base.channels.telegram.session_file ??
+          resolve(base.agent.data_dir, "telegram", "session.txt"),
+        allowedChatIds:
+          runtime.channels.telegramChatIds ?? base.channels.telegram.allowed_chat_ids ?? [],
+      },
+      webhook: {
+        enabled: base.channels.webhook.enabled,
+        secret: runtime.channels.webhookSecret ?? base.channels.webhook.secret,
+        port: runtime.channels.webhookPort ?? base.channels.webhook.port,
+      },
+      whatsapp: {
+        enabled: runtime.channels.whatsappEnabled ?? base.channels.whatsapp.enabled,
+        sessionDir:
+          runtime.channels.whatsappSessionDir ??
+          base.channels.whatsapp.session_dir ??
+          resolve(base.agent.data_dir, "whatsapp-session"),
+        allowedJids:
+          runtime.channels.whatsappAllowedJids ?? base.channels.whatsapp.allowed_jids ?? [],
+        pairPhone: runtime.channels.whatsappPairPhone,
+      },
+    },
+    growth: {
+      reflectionEnabled: base.growth.reflection_enabled,
+      initiativeEnabled: base.growth.initiative_enabled,
+      skillAutoPromote: base.growth.skill_auto_promote,
+    },
+    tools: {
+      sidecarAutoBuild: base.tools.sidecar.auto_build,
+    },
   };
 };

@@ -12,11 +12,13 @@
     "check": "biome check . && pnpm -r run typecheck",
     "test": "pnpm -r run test",
     "dev": "pnpm --filter hairy-agent run dev",
-    "clean": "pnpm -r run clean"
+    "clean": "pnpm -r run clean",
+    "telegram:session": "tsx scripts/telegram-session.ts"
   },
   "devDependencies": {
     "@biomejs/biome": "^1.9.4",
     "@types/node": "^22.13.10",
+    "telegram": "^2.26.22",
     "tsx": "^4.19.3",
     "typescript": "^5.8.2",
     "vitest": "^3.1.4"

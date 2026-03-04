@@ -4,8 +4,8 @@ Channels implement `ChannelAdapter` from `packages/channels/src/types.ts`.
 
 ## Included adapters
 - CLI (`createCliAdapter`)
-- Telegram (`createTelegramAdapter`, scaffolded)
-- WhatsApp (`createWhatsAppAdapter`, scaffolded)
+- Telegram (`createTelegramAdapter`, supports bot + MTProto modes)
+- WhatsApp (`createWhatsAppAdapter`)
 - Webhook (`createWebhookAdapter`)
 
 ## Adapter lifecycle

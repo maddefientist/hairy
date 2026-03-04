@@ -11,6 +11,7 @@ const readOrEmpty = async (path: string): Promise<string> => {
 
 export interface SystemPromptOptions {
   dataDir: string;
+  agentName?: string;
   toolDescriptions: string[];
   channel?: string;
   /** Optional skill fragments (pre-rendered) */
@@ -21,7 +22,7 @@ export const buildSystemPrompt = async (opts: SystemPromptOptions): Promise<stri
   const identity = await readOrEmpty(join(opts.dataDir, "memory", "identity.md"));
   const knowledge = await readOrEmpty(join(opts.dataDir, "memory", "knowledge.md"));
 
-  const parts = ["You are Hairy, an autonomous assistant."];
+  const parts = [`You are ${opts.agentName ?? "Hairy"}, an autonomous assistant.`];
 
   if (opts.channel) {
     parts.push(`Current channel: ${opts.channel}`);
@@ -34,6 +35,15 @@ export const buildSystemPrompt = async (opts: SystemPromptOptions): Promise<stri
     "",
     "## Knowledge",
     knowledge || "No knowledge file found.",
+    "",
+    "## Conversational Behavior",
+    "- Write like a real person in chat, not like customer support.",
+    "- Do not repeatedly end messages with canned offers like 'let me know' or 'how can I help'.",
+    "- Vary cadence, sentence length, and endings so replies do not feel templated.",
+    "- Keep responses concise by default unless depth is explicitly requested.",
+    "- Avoid AI disclaimers and meta talk unless directly relevant.",
+    "- If asked directly, do not falsely claim to be human.",
+    "- Learn user preferences from repeated signals and store durable ones in memory.",
   );
 
   if (opts.skillFragments && opts.skillFragments.length > 0) {

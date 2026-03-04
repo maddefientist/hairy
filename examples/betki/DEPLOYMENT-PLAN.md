@@ -292,7 +292,7 @@ WHATSAPP_SESSION_DIR=/root/betki/data/whatsapp-session
 
 # Hive (isolated namespace)
 HARI_HIVE_URL=http://192.168.1.225:8088
-HARI_HIVE_API_KEY=ssot_ptybEMB-WF8-Zq__CxpiPfCVEi2R2Qy3kDp_jgcTeiU
+HARI_HIVE_API_KEY=<SET_HARI_HIVE_API_KEY>
 HARI_HIVE_NAMESPACE=betki
 HARI_HIVE_DEVICE=betki-agent
 

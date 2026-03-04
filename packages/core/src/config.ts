@@ -10,6 +10,58 @@ const providerSchema = z.object({
   base_url: z.string().url().optional(),
 });
 
+const channelsSchema = z.object({
+  telegram: z
+    .object({
+      enabled: z.boolean().default(false),
+      mode: z.enum(["bot", "mtproto"]).default("bot"),
+      bot_token: z.string().optional(),
+      allowed_chat_ids: z.array(z.string()).optional(),
+      session_file: z.string().optional(),
+    })
+    .default({ enabled: false, mode: "bot" }),
+  whatsapp: z
+    .object({
+      enabled: z.boolean().default(false),
+      session_dir: z.string().optional(),
+      allowed_jids: z.array(z.string()).optional(),
+    })
+    .default({ enabled: false }),
+  webhook: z
+    .object({
+      enabled: z.boolean().default(false),
+      port: z.number().int().positive().default(8080),
+      secret: z.string().optional(),
+    })
+    .default({ enabled: false, port: 8080 }),
+  cli: z
+    .object({
+      enabled: z.boolean().default(true),
+    })
+    .default({ enabled: true }),
+});
+
+const growthSchema = z.object({
+  reflection_enabled: z.boolean().default(true),
+  initiative_enabled: z.boolean().default(false),
+  skill_auto_promote: z.boolean().default(false),
+});
+
+const toolsSchema = z.object({
+  bash: z
+    .object({
+      timeout_ms: z.number().int().positive().default(30000),
+      max_output_bytes: z.number().int().positive().default(1_048_576),
+    })
+    .default({ timeout_ms: 30000, max_output_bytes: 1_048_576 }),
+  sidecar: z
+    .object({
+      auto_build: z.boolean().default(true),
+      health_check_interval_ms: z.number().int().positive().default(30000),
+    })
+    .default({ auto_build: true, health_check_interval_ms: 30000 }),
+});
+
 const configSchema = z.object({
   agent: z.object({
     name: z.string().default("Hairy"),
@@ -20,19 +72,50 @@ const configSchema = z.object({
   health: z.object({
     port: z.number().int().positive().default(9090),
   }),
+  channels: channelsSchema.default({
+    telegram: { enabled: false, mode: "bot" },
+    whatsapp: { enabled: false },
+    webhook: { enabled: false, port: 8080 },
+    cli: { enabled: true },
+  }),
   providers: z
     .object({
       anthropic: providerSchema.optional(),
       openrouter: providerSchema.optional(),
       ollama: providerSchema.optional(),
+      gemini: providerSchema.optional(),
     })
     .default({}),
   routing: z
     .object({
       default_provider: z.string().default("anthropic"),
       fallback_chain: z.array(z.string()).default(["anthropic"]),
+      rules: z
+        .record(
+          z.object({
+            provider: z.string(),
+            model: z.string(),
+          }),
+        )
+        .optional(),
+      cost: z
+        .object({
+          track: z.boolean().default(true),
+          daily_budget_usd: z.number().positive().default(10),
+          alert_threshold_pct: z.number().min(0).max(100).default(80),
+        })
+        .default({ track: true, daily_budget_usd: 10, alert_threshold_pct: 80 }),
     })
     .default({ default_provider: "anthropic", fallback_chain: ["anthropic"] }),
+  growth: growthSchema.default({
+    reflection_enabled: true,
+    initiative_enabled: false,
+    skill_auto_promote: false,
+  }),
+  tools: toolsSchema.default({
+    bash: { timeout_ms: 30000, max_output_bytes: 1_048_576 },
+    sidecar: { auto_build: true, health_check_interval_ms: 30000 },
+  }),
 });
 
 export type HairyConfig = z.infer<typeof configSchema>;

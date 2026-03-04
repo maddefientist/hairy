@@ -18,6 +18,7 @@
   },
   "dependencies": {
     "@hairy/core": "workspace:*",
+    "@hairy/memory": "workspace:*",
     "@hairy/observability": "workspace:*",
     "zod": "^3.24.2"
   }

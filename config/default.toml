@@ -9,6 +9,9 @@ port = 9090
 
 [channels.telegram]
 enabled = false
+mode = "bot"
+# session_file used only in mtproto mode
+session_file = "./data/telegram/session.txt"
 
 [channels.whatsapp]
 enabled = false
@@ -29,6 +32,10 @@ default_model = "claude-sonnet-4-20250514"
 enabled = false
 default_model = "anthropic/claude-sonnet-4-20250514"
 
+[providers.gemini]
+enabled = false
+default_model = "gemini-2.5-flash"
+
 [providers.ollama]
 enabled = false
 base_url = "http://localhost:11434"
@@ -36,7 +43,7 @@ default_model = "llama3.2"
 
 [routing]
 default_provider = "anthropic"
-fallback_chain = ["anthropic", "openrouter", "ollama"]
+fallback_chain = ["anthropic", "gemini", "openrouter", "ollama"]
 
 [routing.cost]
 track = true

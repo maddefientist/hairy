@@ -5,7 +5,7 @@
 Hairy is a reusable TypeScript template for building persistent AI agents that:
 - Run 24/7 as daemon processes
 - Connect to users through multiple channels (CLI, Telegram, WhatsApp, webhooks)
-- Reason with multimodal LLMs (Anthropic Claude, OpenRouter, Ollama)
+- Reason with multimodal LLMs (Anthropic Claude, Google Gemini, OpenRouter, Ollama)
 - Take initiative through scheduled tasks and proactivity rules
 - Learn from interactions and versioning their own prompts
 - Extend themselves with Rust/Go sidecar binaries
@@ -19,7 +19,7 @@ Hairy is a reusable TypeScript template for building persistent AI agents that:
 
 Hairy is not a pre-built agent. It's a **framework** — a starting template with:
 - A monorepo structure (7 packages + 1 app)
-- Pluggable LLM providers (Anthropic, OpenRouter, Ollama)
+- Pluggable LLM providers (Anthropic, Google Gemini, OpenRouter, Ollama)
 - Multi-channel adapters (Telegram, WhatsApp, webhooks, CLI)
 - Tool execution with sandboxing and permission checks
 - Memory subsystem (short-term context, long-term semantic, episodic logs)
@@ -69,7 +69,13 @@ export OPENROUTER_API_KEY="sk-or-..."
 ```
 Get a key: https://openrouter.ai/keys
 
-**Option C: Local Ollama (free, runs on your machine)**
+**Option C: Google Gemini**
+```bash
+export GEMINI_API_KEY="..."
+```
+Get a key: https://aistudio.google.com/apikey
+
+**Option D: Local Ollama (free, runs on your machine)**
 - Install Ollama: https://ollama.ai
 - Run: `ollama serve`
 - Models auto-detect; no API key needed
@@ -83,20 +89,31 @@ Channels are how users talk to Hairy.
 **Option A: CLI (easiest for testing)**
 Already enabled. Just run `pnpm dev` and type messages into the terminal.
 
-**Option B: Telegram**
+**Option B: Telegram (bot mode)**
 ```bash
+export TELEGRAM_MODE="bot"
 export TELEGRAM_BOT_TOKEN="..."
-export TELEGRAM_CHAT_IDS="123,456"  # Comma-separated user IDs
+export TELEGRAM_CHAT_IDS="123,456"  # Comma-separated chat IDs
 ```
 Create a bot: [@BotFather](https://t.me/botfather) on Telegram.
 
-**Option C: WhatsApp**
+**Option C: Telegram (MTProto user mode)**
+```bash
+export TELEGRAM_MODE="mtproto"
+export TELEGRAM_API_ID="123456"
+export TELEGRAM_API_HASH="..."
+export TELEGRAM_PHONE_NUMBER="+15551234567"
+export TELEGRAM_SESSION_FILE="./data/telegram/session.txt"
+pnpm telegram:session  # one-time login bootstrap
+```
+
+**Option D: WhatsApp**
 ```bash
 export WHATSAPP_SESSION_DIR="./data/whatsapp-session"
 ```
 Will prompt for QR code on first connect.
 
-**Option D: Webhooks (for custom integrations)**
+**Option E: Webhooks (for custom integrations)**
 ```bash
 export WEBHOOK_SECRET="my-secret-key"
 # Listening on http://localhost:8080/webhook/incoming
@@ -249,10 +266,29 @@ All tool inputs are validated with Zod. All executions are logged with trace IDs
 Memory has three layers:
 
 1. **Conversation** (`context.jsonl`): Recent messages — auto-windowed to fit context limits
-2. **Semantic** (local or hari-hive): Long-term facts, tagged and searchable
+2. **Semantic** (pluggable backend): Long-term facts, tagged and searchable
 3. **Episodic** (`episodic/*.jsonl`): Daily logs of runs, tool calls, events
 
 After each run, **reflection** extracts learnings and stores them in semantic memory.
+
+#### Memory Backends
+
+Semantic memory uses a pluggable `MemoryBackend` interface:
+
+- **Local** (default): JSON file + keyword scoring. Zero deps, works immediately on `git clone`.
+- **Hive** (optional): Connects to [agentssot](https://github.com/maddefientist/agentssot) for embedding-based semantic search. Set `HARI_HIVE_URL` to activate.
+- **Bring your own**: Implement the `MemoryBackend` interface for ChromaDB, Qdrant, Pinecone, etc.
+
+```bash
+# Local backend (default — no config needed)
+pnpm dev
+
+# Hive backend (auto-detected from env)
+export HARI_HIVE_URL=http://localhost:8088
+export HARI_HIVE_API_KEY=your-key
+export HARI_HIVE_NAMESPACE=my-agent
+pnpm dev
+```
 
 ### Skills & Versioning
 
@@ -447,6 +483,8 @@ enabled = true
 
 [channels.telegram]
 enabled = false
+mode = "bot"
+session_file = "./data/telegram/session.txt"
 
 [providers.anthropic]
 enabled = true
@@ -504,11 +542,22 @@ Check logs for errors. Health endpoint:
 curl http://localhost:9090/health
 ```
 
-### Telegram bot not responding
-Verify token and chat ID are correct:
+### Telegram not responding
+Bot mode:
 ```bash
+export TELEGRAM_MODE="bot"
 export TELEGRAM_BOT_TOKEN="..."
 export TELEGRAM_CHAT_IDS="123"
+```
+
+MTProto mode:
+```bash
+export TELEGRAM_MODE="mtproto"
+export TELEGRAM_API_ID="123456"
+export TELEGRAM_API_HASH="..."
+export TELEGRAM_PHONE_NUMBER="+15551234567"
+export TELEGRAM_SESSION_FILE="./data/telegram/session.txt"
+pnpm telegram:session
 ```
 
 ### Messages are being ignored

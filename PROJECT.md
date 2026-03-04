@@ -1,64 +1,80 @@
 # Hairy — Project Context
 
 ## Summary
-Hairy is a reusable, autonomous, long-running agent framework. It runs as a persistent daemon, connects to users via Telegram/WhatsApp/webhooks, reasons with multimodal LLMs (Anthropic, OpenRouter, Ollama), takes initiative, extends itself with Rust/Go sidecars, and learns from interactions.
+Hairy is a reusable, autonomous, long-running agent framework. It runs as a persistent daemon, connects to users via Telegram/WhatsApp/webhooks, reasons with multimodal LLMs (Anthropic, Gemini, OpenRouter, Ollama), takes initiative, extends itself with Rust/Go sidecars, and learns from interactions.
 
 ## Stack
 - **Language**: TypeScript 5.7+ (ESM, strict)
 - **Runtime**: Node.js 22+
 - **Package Manager**: pnpm 9+ (workspaces)
-- **Build**: tsgo (TypeScript Go compiler)
+- **Build**: tsc (TypeScript compiler)
 - **Lint/Format**: Biome
 - **Test**: Vitest
-- **Telegram**: grammY
+- **Telegram**: grammY (Bot API) + GramJS (MTProto user login)
 - **WhatsApp**: Baileys
 - **HTTP**: Hono
 - **Scheduling**: croner
 - **Validation**: Zod
 - **Config**: TOML
-- **Logging**: pino
+- **Logging**: pino (via HairyLogger interface)
+- **Memory**: Pluggable backend (local JSON default, Hive optional)
 - **Sidecar Protocol**: JSON-RPC 2.0 over stdio
 - **Sidecar Languages**: Rust, Go
 
 ## Structure
 ```
 apps/hairy-agent/          — Main daemon entry point
-packages/core/             — Orchestrator, task queue, scheduler
-packages/providers/        — LLM provider gateway (Anthropic, OpenRouter, Ollama)
+packages/core/             — Orchestrator, agent loop, task queue, scheduler
+packages/providers/        — LLM provider gateway (Anthropic, Gemini, OpenRouter, Ollama)
 packages/channels/         — Channel adapters (Telegram, WhatsApp, webhook, CLI)
 packages/tools/            — Tool registry + built-in tools + sidecar protocol
-packages/memory/           — Conversation, semantic, episodic memory
+packages/memory/           — Conversation, semantic (pluggable), episodic memory
 packages/growth/           — Skill registry, prompt versioning, initiative engine
 packages/observability/    — Structured logging, metrics, tracing
-sidecars/example-rust/     — Example Rust sidecar extension
-sidecars/example-go/       — Example Go sidecar extension
 config/                    — Default TOML configuration
-docker/                    — Dockerfile + docker-compose
 docs/                      — Documentation
+examples/betki/            — Example: lifestyle agent deployment
 ```
 
 ## How to Run
 ```bash
 pnpm install
 pnpm build
-# Configure env vars (see config/default.toml for reference)
+
+# Minimum: one provider
 export ANTHROPIC_API_KEY=...
-export TELEGRAM_BOT_TOKEN=...
-export TELEGRAM_CHAT_IDS=...
+# Or: export GEMINI_API_KEY=...
+# Or: just run Ollama locally (no key needed)
+
 pnpm dev
 ```
 
-## Ancestry
-Evolved from `packages/moni` in the pi-mono fork (maddefientist/pi-mono).
-Built on patterns from `@mariozechner/pi-agent-core` and `@mariozechner/pi-ai`.
+## Providers
+| Provider | Env Var | Tool Calling | Notes |
+|----------|---------|-------------|-------|
+| Anthropic | `ANTHROPIC_API_KEY` | ✅ | Best reasoning |
+| Gemini | `GEMINI_API_KEY` | ✅ | 2M token context |
+| OpenRouter | `OPENROUTER_API_KEY` | ✅ | Access to many models |
+| Ollama | `OLLAMA_BASE_URL` | ✅ | Local, free, no key |
+
+## Memory Backends
+| Backend | Activation | Search | Dependencies |
+|---------|-----------|--------|-------------|
+| Local (default) | Always | Keyword scoring | None |
+| Hive | `HARI_HIVE_URL` | Embedding similarity | [agentssot](https://github.com/maddefientist/agentssot) |
+| Custom | Implement `MemoryBackend` | Your choice | Your choice |
 
 ## Recent Changes
-- 2026-02-28: Initial architecture spec and Codex implementation prompt created
-- 2026-02-28: Scaffolded pnpm workspace monorepo with core packages, app wiring, sidecar examples, Docker, CI, and docs
+- 2026-02-28: Initial architecture, scaffold, agent loop, provider implementations
+- 2026-02-28: Memory backend abstraction (`MemoryBackend` interface, local + hive backends)
+- 2026-02-28: Added Google Gemini provider (native REST, tool calling)
+- 2026-02-28: Rewrote Ollama provider (`/api/chat`, tool calling, proper message format)
+- 2026-02-28: Renamed tools to backend-agnostic names (`memory_recall`, `memory_ingest`)
+- 2026-02-28: 121 tests across 13 test files, all passing
 
 ## Next Steps
-- Flesh out Telegram and WhatsApp adapters beyond stubs
-- Add robust provider streaming/tool-call handling
-- Add comprehensive unit tests for core queue/scheduler/orchestrator paths
-- Integrate real initiative scheduling flows
-- Harden sidecar sandbox/resource enforcement
+- Streaming support for Ollama and Gemini providers
+- Additional memory backends (ChromaDB, SQLite+embeddings)
+- Docker compose for one-command deployment
+- CI pipeline (GitHub Actions)
+- Eval-driven skill auto-promotion

@@ -1,7 +1,3 @@
-/**
- * Ollama provider — uses /api/chat (not the legacy /api/generate).
- * Supports tool calling for models that implement it (llama3.1+, qwen2.5+, etc.)
- */
 import type {
   ModelInfo,
   Provider,
@@ -15,239 +11,349 @@ interface OllamaOptions {
   baseUrl?: string;
 }
 
-// ─── Conversion helpers ────────────────────────────────────────────────────
+interface OllamaToolCall {
+  id?: string;
+  type?: string;
+  function?: {
+    name?: string;
+    arguments?: unknown;
+  };
+}
 
-/** Ollama tool format (same shape as OpenAI function tools) */
-const toOllamaTools = (
-  tools: ToolDefinition[],
-): Array<{
-  type: "function";
-  function: { name: string; description: string; parameters: Record<string, unknown> };
-}> =>
-  tools.map((t) => ({
-    type: "function" as const,
-    function: {
-      name: t.name,
-      description: t.description,
-      parameters: { type: "object", ...t.parameters },
-    },
-  }));
+interface OllamaChatMessage {
+  role: "system" | "user" | "assistant" | "tool";
+  content?: string;
+  tool_calls?: OllamaToolCall[];
+  tool_call_id?: string;
+  tool_name?: string;
+}
 
-/** Convert our ProviderMessage[] to Ollama chat messages */
-const toOllamaMessages = (messages: ProviderMessage[]): Array<Record<string, unknown>> => {
-  const result: Array<Record<string, unknown>> = [];
+interface OllamaChunk {
+  message?: {
+    role?: string;
+    content?: string;
+    thinking?: string;
+    tool_calls?: OllamaToolCall[];
+  };
+  done?: boolean;
+  done_reason?: string;
+  prompt_eval_count?: number;
+  eval_count?: number;
+}
 
-  for (const m of messages) {
-    if (m.role === "system") {
-      // Ollama accepts a system role in the messages array
-      const text = m.content
-        .filter((p) => p.type === "text")
-        .map((p) => p.text ?? "")
-        .join("\n");
-      if (text) result.push({ role: "system", content: text });
-      continue;
+const toObjectOrString = (value: unknown): unknown => {
+  if (typeof value === "string") {
+    try {
+      return JSON.parse(value) as unknown;
+    } catch {
+      return value;
     }
+  }
+  return value;
+};
 
-    if (m.role === "assistant") {
-      const text = m.content
-        .filter((p) => p.type === "text")
-        .map((p) => p.text ?? "")
-        .join("\n");
+const toOllamaMessages = (
+  messages: ProviderMessage[],
+  systemPrompt?: string,
+): OllamaChatMessage[] => {
+  const result: OllamaChatMessage[] = [];
 
-      const toolCalls = m.content
-        .filter((p) => p.type === "tool_call" && p.toolCall)
-        .map((p) => ({
-          type: "function",
-          function: {
-            name: p.toolCall?.name,
-            arguments: p.toolCall?.args, // Ollama wants object, not string
-          },
-        }));
+  if (systemPrompt && systemPrompt.trim().length > 0) {
+    result.push({ role: "system", content: systemPrompt });
+  }
 
-      const msg: Record<string, unknown> = {
-        role: "assistant",
-        content: text || "",
-      };
-      if (toolCalls.length > 0) msg.tool_calls = toolCalls;
-      result.push(msg);
-      continue;
-    }
+  for (const message of messages) {
+    const text = message.content
+      .filter((part) => part.type === "text" && typeof part.text === "string")
+      .map((part) => part.text ?? "")
+      .join("\n")
+      .trim();
 
-    // user role — may contain text or tool results
-    const toolResults = m.content.filter((p) => p.type === "tool_result" && p.toolResult);
+    const toolResults = message.content.filter(
+      (part): part is { type: "tool_result"; toolResult: { id: string; content: string } } =>
+        part.type === "tool_result" && part.toolResult !== undefined,
+    );
+
+    const toolCalls = message.content
+      .filter(
+        (
+          part,
+        ): part is { type: "tool_call"; toolCall: { id: string; name: string; args: unknown } } =>
+          part.type === "tool_call" && part.toolCall !== undefined,
+      )
+      .map((part) => ({
+        id: part.toolCall.id,
+        type: "function",
+        function: {
+          name: part.toolCall.name,
+          arguments: toObjectOrString(part.toolCall.args),
+        },
+      }));
 
     if (toolResults.length > 0) {
-      // Ollama tool results: one message per result, role "tool" + tool_name
-      for (const p of toolResults) {
-        if (!p.toolResult) continue;
+      for (const toolResult of toolResults) {
         result.push({
           role: "tool",
-          tool_name: p.toolResult.id, // Ollama uses tool_name not tool_call_id
-          content: p.toolResult.content,
+          content: toolResult.toolResult.content,
+          tool_call_id: toolResult.toolResult.id,
+          tool_name: toolResult.toolResult.id,
         });
       }
-    } else {
-      const text = m.content
-        .filter((p) => p.type === "text")
-        .map((p) => p.text ?? "")
-        .join("\n");
-      if (text) result.push({ role: "user", content: text });
+    }
+
+    if (message.role === "assistant") {
+      result.push({
+        role: "assistant",
+        ...(text ? { content: text } : {}),
+        ...(toolCalls.length > 0 ? { tool_calls: toolCalls } : {}),
+      });
+      continue;
+    }
+
+    if (message.role === "system" || message.role === "user") {
+      if (text.length > 0) {
+        result.push({ role: message.role, content: text });
+      }
+      continue;
+    }
+
+    if (message.role === "tool" && text.length > 0) {
+      result.push({ role: "tool", content: text });
     }
   }
 
   return result;
 };
 
-// ─── Response types ─────────────────────────────────────────────────────────
+const toOllamaTools = (
+  tools: ToolDefinition[],
+): Array<{ type: "function"; function: Record<string, unknown> }> => {
+  return tools.map((tool) => ({
+    type: "function",
+    function: {
+      name: tool.name,
+      description: tool.description,
+      parameters: {
+        type: "object",
+        ...tool.parameters,
+      },
+    },
+  }));
+};
 
-interface OllamaToolCall {
-  type?: string;
-  function?: {
-    index?: number;
-    name?: string;
-    arguments?: unknown; // object, not string!
-  };
-}
+const emitChunk = (
+  chunk: OllamaChunk,
+  emit: (event: StreamEvent) => void,
+  nextToolCallId: () => string,
+): void => {
+  const msg = chunk.message;
+  if (!msg) {
+    return;
+  }
 
-interface OllamaChatResponse {
-  message?: {
-    role?: string;
-    content?: string | null;
-    tool_calls?: OllamaToolCall[];
-  };
-  done?: boolean;
-  prompt_eval_count?: number;
-  eval_count?: number;
-}
+  if (typeof msg.thinking === "string" && msg.thinking.length > 0) {
+    emit({ type: "thinking", text: msg.thinking });
+  }
 
-// ─── Provider ───────────────────────────────────────────────────────────────
+  if (typeof msg.content === "string" && msg.content.length > 0) {
+    emit({ type: "text_delta", text: msg.content });
+  }
+
+  for (const toolCall of msg.tool_calls ?? []) {
+    const callId = toolCall.id ?? nextToolCallId();
+    const toolName = toolCall.function?.name ?? "unknown_tool";
+    const argsRaw = toolCall.function?.arguments;
+    const args = typeof argsRaw === "string" ? argsRaw : JSON.stringify(argsRaw ?? {});
+
+    emit({ type: "tool_call_start", toolCallId: callId, toolName });
+    emit({ type: "tool_call_delta", toolCallId: callId, toolArgsDelta: args });
+    emit({ type: "tool_call_end", toolCallId: callId });
+  }
+};
+
+const parseDoneReason = (chunk: OllamaChunk): string => {
+  const reason = chunk.done_reason;
+  if (reason === "tool_calls" || reason === "tool_call") return "tool_use";
+  if ((chunk.message?.tool_calls?.length ?? 0) > 0) return "tool_use";
+  return "end";
+};
 
 export const createOllamaProvider = (opts: OllamaOptions = {}): Provider => {
-  const baseUrl = opts.baseUrl ?? process.env.OLLAMA_BASE_URL ?? "http://localhost:11434";
+  const baseUrl = opts.baseUrl ?? "http://localhost:11434";
 
   return {
     name: "ollama",
     supportsImages: true,
-    supportsThinking: false,
+    supportsThinking: true,
 
     async *stream(
       messages: ProviderMessage[],
       streamOpts: StreamOptions,
     ): AsyncIterable<StreamEvent> {
-      const body: Record<string, unknown> = {
+      const requestBody: Record<string, unknown> = {
         model: streamOpts.model,
-        messages: toOllamaMessages(messages),
-        stream: false,
+        messages: toOllamaMessages(messages, streamOpts.systemPrompt),
+        stream: true,
         options: {
           temperature: streamOpts.temperature,
           num_predict: streamOpts.maxTokens,
         },
       };
 
-      if (streamOpts.systemPrompt) {
-        // Prepend system message if not already in messages
-        const existing = body.messages as Array<{ role: string }>;
-        if (!existing.some((m) => m.role === "system")) {
-          (body.messages as Array<unknown>).unshift({
-            role: "system",
-            content: streamOpts.systemPrompt,
-          });
-        }
+      if (streamOpts.thinkingLevel && streamOpts.thinkingLevel !== "off") {
+        requestBody.think = streamOpts.thinkingLevel;
       }
 
       if (streamOpts.tools && streamOpts.tools.length > 0) {
-        body.tools = toOllamaTools(streamOpts.tools);
+        requestBody.tools = toOllamaTools(streamOpts.tools);
       }
 
-      let response: Response;
+      let response: Awaited<ReturnType<typeof fetch>>;
       try {
-        response = await fetch(`${baseUrl}/api/chat`, {
+        response = await fetch(`${baseUrl.replace(/\/$/, "")}/api/chat`, {
           method: "POST",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify(body),
+          body: JSON.stringify(requestBody),
         });
-      } catch (err: unknown) {
-        const msg = err instanceof Error ? err.message : "network error";
-        yield { type: "error", error: `ollama unreachable: ${msg}` };
+      } catch (error: unknown) {
+        yield {
+          type: "error",
+          error: `ollama unreachable: ${error instanceof Error ? error.message : "request failed"}`,
+        };
         return;
       }
 
       if (!response.ok) {
-        const errBody = await response.text().catch(() => "");
-        yield { type: "error", error: `ollama ${response.status}: ${errBody}` };
-        return;
-      }
-
-      const payload = (await response.json()) as OllamaChatResponse;
-
-      // Emit usage
-      if (payload.prompt_eval_count !== undefined || payload.eval_count !== undefined) {
+        const errorBody = await response.text().catch(() => "unknown");
         yield {
-          type: "usage",
-          usage: {
-            input: payload.prompt_eval_count ?? 0,
-            output: payload.eval_count ?? 0,
-            costUsd: 0, // local, free
-          },
+          type: "error",
+          error: `ollama request failed with ${response.status}: ${errorBody}`,
         };
-      }
-
-      const msg = payload.message;
-      if (!msg) {
-        yield { type: "stop", reason: "end" };
         return;
       }
 
-      // Text content
-      if (msg.content) {
-        yield { type: "text_delta", text: msg.content };
-      }
+      let toolCounter = 0;
+      const nextToolCallId = (): string => {
+        toolCounter += 1;
+        return `ollama-call-${toolCounter}`;
+      };
 
-      // Tool calls — Ollama arguments are already objects
-      if (msg.tool_calls && msg.tool_calls.length > 0) {
-        for (let i = 0; i < msg.tool_calls.length; i++) {
-          const tc = msg.tool_calls[i];
-          if (!tc) continue;
-          const callId = `ollama_call_${i}`;
-          const name = tc.function?.name ?? "";
-          const args = tc.function?.arguments ?? {};
+      const queuedEvents: StreamEvent[] = [];
+      const emit = (event: StreamEvent): void => {
+        queuedEvents.push(event);
+      };
 
-          yield { type: "tool_call_start", toolCallId: callId, toolName: name };
-          yield {
-            type: "tool_call_delta",
-            toolCallId: callId,
-            toolArgsDelta: JSON.stringify(args),
-          };
-          yield { type: "tool_call_end", toolCallId: callId };
+      let stopEmitted = false;
+
+      const consumeChunk = (chunk: OllamaChunk): void => {
+        emitChunk(chunk, emit, nextToolCallId);
+
+        if (chunk.done) {
+          emit({
+            type: "usage",
+            usage: {
+              input: chunk.prompt_eval_count ?? 0,
+              output: chunk.eval_count ?? 0,
+              costUsd: 0,
+            },
+          });
+          emit({ type: "stop", reason: parseDoneReason(chunk) });
+          stopEmitted = true;
         }
-        yield { type: "stop", reason: "tool_use" };
+      };
+
+      if (!response.body) {
+        const payload = (await response.json()) as OllamaChunk;
+        consumeChunk(payload);
+        while (queuedEvents.length > 0) {
+          yield queuedEvents.shift() as StreamEvent;
+        }
+        if (!stopEmitted) {
+          yield { type: "stop", reason: "end" };
+        }
         return;
       }
 
-      yield { type: "stop", reason: "end" };
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) {
+          break;
+        }
+
+        buffer += decoder.decode(value, { stream: true });
+
+        let newlineIdx = buffer.indexOf("\n");
+        while (newlineIdx !== -1) {
+          const rawLine = buffer.slice(0, newlineIdx).trim();
+          buffer = buffer.slice(newlineIdx + 1);
+
+          if (rawLine.length > 0) {
+            const normalized = rawLine.startsWith("data:")
+              ? rawLine.slice("data:".length).trim()
+              : rawLine;
+
+            if (normalized !== "[DONE]") {
+              try {
+                const chunk = JSON.parse(normalized) as OllamaChunk;
+                consumeChunk(chunk);
+              } catch {
+                // Ignore malformed chunk and continue streaming.
+              }
+            }
+          }
+
+          while (queuedEvents.length > 0) {
+            yield queuedEvents.shift() as StreamEvent;
+          }
+
+          newlineIdx = buffer.indexOf("\n");
+        }
+      }
+
+      const trailing = buffer.trim();
+      if (trailing.length > 0 && trailing !== "[DONE]") {
+        try {
+          const chunk = JSON.parse(trailing) as OllamaChunk;
+          consumeChunk(chunk);
+          while (queuedEvents.length > 0) {
+            yield queuedEvents.shift() as StreamEvent;
+          }
+        } catch {
+          // Ignore trailing malformed chunk.
+        }
+      }
+
+      if (!stopEmitted) {
+        yield { type: "stop", reason: "end" };
+      }
     },
 
     async listModels(): Promise<ModelInfo[]> {
       try {
-        const response = await fetch(`${baseUrl}/api/tags`);
-        if (!response.ok) return [];
+        const response = await fetch(`${baseUrl.replace(/\/$/, "")}/api/tags`);
+        if (!response.ok) {
+          return [];
+        }
 
         const payload = (await response.json()) as unknown;
-        if (typeof payload !== "object" || payload === null) return [];
+        if (typeof payload !== "object" || payload === null) {
+          return [];
+        }
 
-        const models =
-          (payload as { models?: Array<{ name?: string; details?: { parameter_size?: string } }> })
-            .models ?? [];
-
+        const models = (payload as { models?: Array<{ name?: string }> }).models ?? [];
         return models
-          .filter((m): m is { name: string } => typeof m.name === "string")
-          .map((m) => ({
-            id: m.name,
-            name: m.name,
+          .filter((model): model is { name: string } => typeof model.name === "string")
+          .map((model) => ({
+            id: model.name,
+            name: model.name,
             provider: "ollama",
             contextWindow: 8192,
-            supportsImages: m.name.includes("llava") || m.name.includes("vision"),
-            supportsThinking: false,
+            supportsImages: true,
+            supportsThinking: true,
           }));
       } catch {
         return [];

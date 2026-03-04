@@ -1,116 +1,119 @@
-import { randomUUID } from "node:crypto";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
-import { dirname } from "node:path";
-import type { SemanticRecord } from "./types.js";
+import { type HiveBackendOptions, HiveMemoryBackend } from "./backends/hive.js";
+/**
+ * SemanticMemory — thin wrapper that delegates to a MemoryBackend.
+ *
+ * The backend is pluggable:
+ *  - LocalMemoryBackend  (default — JSON file, keyword scoring, zero deps)
+ *  - HiveMemoryBackend   (optional — Hari-Hive semantic search service)
+ *  - Bring your own:      implement MemoryBackend, pass it in
+ *
+ * Factory: `createMemoryBackend()` picks the right one from env vars.
+ */
+import { LocalMemoryBackend } from "./backends/local.js";
+import type { MemoryBackend, SearchResult } from "./types.js";
 
-interface SemanticMemoryOptions {
+export interface SemanticMemoryOptions {
+  /** Path for local JSON storage (used by LocalMemoryBackend, and as fallback) */
   filePath: string;
-  hiveApiUrl?: string;
+  /** Inject a pre-built backend. If omitted, `createMemoryBackend()` is used. */
+  backend?: MemoryBackend;
 }
-
-interface SearchResult extends SemanticRecord {
-  score: number;
-}
-
-const tokenize = (text: string): string[] =>
-  text
-    .toLowerCase()
-    .replaceAll(/[^a-z0-9\s]/g, " ")
-    .split(/\s+/)
-    .filter((token) => token.length > 1);
-
-const score = (query: string, content: string): number => {
-  const queryTokens = new Set(tokenize(query));
-  const contentTokens = tokenize(content);
-  if (contentTokens.length === 0) {
-    return 0;
-  }
-
-  let hits = 0;
-  for (const token of contentTokens) {
-    if (queryTokens.has(token)) {
-      hits += 1;
-    }
-  }
-
-  return hits / contentTokens.length;
-};
 
 export class SemanticMemory {
-  constructor(private readonly opts: SemanticMemoryOptions) {}
+  private readonly backend: MemoryBackend;
+  private readonly fallback: LocalMemoryBackend;
+
+  constructor(opts: SemanticMemoryOptions) {
+    this.fallback = new LocalMemoryBackend({ filePath: opts.filePath });
+    this.backend = opts.backend ?? this.fallback;
+  }
+
+  /** Which backend is active */
+  get backendName(): string {
+    return this.backend.name;
+  }
 
   async store(content: string, tags: string[] = []): Promise<string> {
-    if (this.opts.hiveApiUrl) {
-      try {
-        const response = await fetch(`${this.opts.hiveApiUrl}/knowledge`, {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ content, tags }),
-        });
-
-        if (response.ok) {
-          const payload = (await response.json()) as { id?: string };
-          if (payload.id) {
-            return payload.id;
-          }
-        }
-      } catch {
-        // Hive unavailable — fall through to local storage
+    try {
+      return await this.backend.store(content, tags);
+    } catch {
+      // If remote backend fails, fall through to local
+      if (this.backend !== this.fallback) {
+        return this.fallback.store(content, tags);
       }
+      throw new Error("local memory backend failed");
     }
-
-    const records = await this.readLocal();
-    const id = randomUUID();
-    records.push({
-      id,
-      content,
-      tags,
-      createdAt: new Date().toISOString(),
-    });
-    await this.writeLocal(records);
-    return id;
   }
 
   async search(query: string, topK = 5): Promise<SearchResult[]> {
-    if (this.opts.hiveApiUrl) {
-      try {
-        const response = await fetch(`${this.opts.hiveApiUrl}/search`, {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ query, topK }),
-        });
-
-        if (response.ok) {
-          const payload = (await response.json()) as { items?: SearchResult[] };
-          return payload.items ?? [];
-        }
-      } catch {
-        // Hive unavailable — fall through to local search
-      }
-    }
-
-    const local = await this.readLocal();
-    return local
-      .map((item) => ({ ...item, score: score(query, item.content) }))
-      .sort((a, b) => b.score - a.score)
-      .slice(0, topK);
-  }
-
-  async feedback(_id: string, _signal: "useful" | "noted" | "wrong"): Promise<void> {
-    // Local fallback currently does not persist ranking feedback.
-  }
-
-  private async readLocal(): Promise<SemanticRecord[]> {
     try {
-      const raw = await readFile(this.opts.filePath, "utf8");
-      return JSON.parse(raw) as SemanticRecord[];
+      return await this.backend.search(query, topK);
     } catch {
+      if (this.backend !== this.fallback) {
+        return this.fallback.search(query, topK);
+      }
       return [];
     }
   }
 
-  private async writeLocal(records: SemanticRecord[]): Promise<void> {
-    await mkdir(dirname(this.opts.filePath), { recursive: true });
-    await writeFile(this.opts.filePath, JSON.stringify(records, null, 2), "utf8");
+  async feedback(id: string, signal: "useful" | "noted" | "wrong"): Promise<void> {
+    if (this.backend.feedback) {
+      await this.backend.feedback(id, signal);
+    }
   }
 }
+
+// ── Factory ──────────────────────────────────────────────────────────────
+
+export interface MemoryBackendEnvOptions {
+  /** Path for local JSON file (always used as fallback) */
+  filePath: string;
+  /** Explicit hive options — if provided, hive backend is used */
+  hive?: HiveBackendOptions;
+}
+
+/**
+ * Create a MemoryBackend from environment variables.
+ *
+ * Priority:
+ *  1. If `hive` options or `HARI_HIVE_URL` env var is set → HiveMemoryBackend
+ *  2. Otherwise → LocalMemoryBackend (works immediately, no infra needed)
+ */
+export const createMemoryBackend = (opts: MemoryBackendEnvOptions): MemoryBackend => {
+  // Explicit hive config takes priority
+  if (opts.hive) {
+    return new HiveMemoryBackend(opts.hive);
+  }
+
+  // Auto-detect from env vars
+  const hiveUrl = process.env.HARI_HIVE_URL;
+  if (hiveUrl) {
+    return new HiveMemoryBackend({
+      apiUrl: hiveUrl,
+      apiKey: process.env.HARI_HIVE_API_KEY,
+      readApiKey: process.env.HARI_HIVE_READ_API_KEY,
+      writeApiKey: process.env.HARI_HIVE_WRITE_API_KEY,
+      namespace: process.env.HARI_HIVE_NAMESPACE,
+      readNamespaces: parseCsvEnv(process.env.HARI_HIVE_READ_NAMESPACES),
+      writeNamespace: process.env.HARI_HIVE_WRITE_NAMESPACE,
+      device: process.env.HARI_HIVE_DEVICE,
+    });
+  }
+
+  // Default: local JSON backend
+  return new LocalMemoryBackend({ filePath: opts.filePath });
+};
+
+const parseCsvEnv = (value: string | undefined): string[] | undefined => {
+  if (!value) return undefined;
+  const items = value
+    .split(",")
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0);
+  return items.length > 0 ? items : undefined;
+};
+
+// Re-export backends for direct use
+export { LocalMemoryBackend } from "./backends/local.js";
+export { HiveMemoryBackend } from "./backends/hive.js";
+export type { HiveBackendOptions } from "./backends/hive.js";

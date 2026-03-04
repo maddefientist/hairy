@@ -1,4 +1,5 @@
 import { mkdir } from "node:fs/promises";
+import { join } from "node:path";
 import type { AgentResponse } from "@hairy/core";
 import type { HairyLogger as Logger } from "@hairy/observability";
 import type { Boom } from "@hapi/boom";
@@ -11,11 +12,17 @@ import makeWASocket, {
   useMultiFileAuthState,
 } from "@whiskeysockets/baileys";
 import pino from "pino";
+import qrcode from "qrcode-terminal";
 import { BaseAdapter } from "./adapter.js";
 
 export interface WhatsAppOpts {
   /** Directory to persist session credentials */
   sessionDir: string;
+  /**
+   * If set, request a WhatsApp linking code for this phone number
+   * (digits only or +E.164 accepted).
+   */
+  pairPhone?: string;
   /**
    * If set, only messages from these JIDs are accepted.
    * Format: "14155552671@s.whatsapp.net" or "1234567890-group@g.us"
@@ -28,6 +35,7 @@ export class WhatsAppAdapter extends BaseAdapter {
   readonly channelType = "whatsapp";
   private sock: WASocket | null = null;
   private stopping = false;
+  private pairingCodeRequested = false;
 
   constructor(private readonly opts: WhatsAppOpts) {
     super();
@@ -36,8 +44,42 @@ export class WhatsAppAdapter extends BaseAdapter {
   async connect(): Promise<void> {
     if (this.connected) return;
     this.stopping = false;
+    this.pairingCodeRequested = false;
     await mkdir(this.opts.sessionDir, { recursive: true });
     await this.createSocket();
+  }
+
+  private sanitizePairPhone(input: string): string {
+    return input.replaceAll(/[^0-9]/g, "");
+  }
+
+  private async maybeRequestPairingCode(sock: WASocket, alreadyRegistered: boolean): Promise<void> {
+    if (alreadyRegistered || !this.opts.pairPhone || this.pairingCodeRequested) {
+      return;
+    }
+
+    const phone = this.sanitizePairPhone(this.opts.pairPhone);
+    if (phone.length < 8) {
+      this.opts.logger.warn(
+        { pairPhone: this.opts.pairPhone },
+        "whatsapp pair phone appears invalid; skipping pairing-code mode",
+      );
+      return;
+    }
+
+    this.pairingCodeRequested = true;
+    try {
+      // Give the socket a moment to finish initial handshake before requesting code
+      await new Promise((resolve) => setTimeout(resolve, 1500));
+      const code = await sock.requestPairingCode(phone);
+      this.opts.logger.info(
+        { pairPhone: phone, pairingCode: code },
+        "whatsapp pairing code ready (use 'Link with phone number instead')",
+      );
+    } catch (error: unknown) {
+      this.opts.logger.error({ err: error }, "failed to request whatsapp pairing code");
+      this.pairingCodeRequested = false;
+    }
   }
 
   private async createSocket(): Promise<void> {
@@ -54,7 +96,7 @@ export class WhatsAppAdapter extends BaseAdapter {
         creds: state.creds,
         keys: makeCacheableSignalKeyStore(state.keys, silentLogger),
       },
-      printQRInTerminal: true,
+      printQRInTerminal: false,
       logger: silentLogger,
       syncFullHistory: false,
       markOnlineOnConnect: false,
@@ -62,11 +104,20 @@ export class WhatsAppAdapter extends BaseAdapter {
 
     this.sock = sock;
 
+    void this.maybeRequestPairingCode(sock, state.creds.registered);
+
     sock.ev.on("connection.update", (update) => {
       const { connection, lastDisconnect, qr } = update;
 
       if (qr) {
-        this.opts.logger.info("whatsapp: scan QR code in terminal to log in");
+        qrcode.generate(qr, { small: true });
+        if (this.opts.pairPhone) {
+          this.opts.logger.info(
+            "whatsapp: QR shown; pairing-code mode also enabled (check logs for pairingCode)",
+          );
+        } else {
+          this.opts.logger.info("whatsapp: scan the QR code shown above to log in");
+        }
       }
 
       if (connection === "open") {
