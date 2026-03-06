@@ -62,7 +62,7 @@ import { buildSystemPrompt } from "./identity.js";
 
 const logger = createLogger("hairy-agent");
 
-type ProviderName = "anthropic" | "openrouter" | "gemini" | "ollama";
+type ProviderName = "anthropic" | "openrouter" | "gemini" | "ollama" | "ollama-fallback";
 
 const buildProviders = (config: Awaited<ReturnType<typeof loadHairyConfig>>): Provider[] => {
   const providers: Provider[] = [];
@@ -81,6 +81,16 @@ const buildProviders = (config: Awaited<ReturnType<typeof loadHairyConfig>>): Pr
 
   if (config.providers.ollama.enabled) {
     providers.push(createOllamaProvider({ baseUrl: config.providers.ollama.baseUrl }));
+
+    // Model-level fallback: same Ollama instance, different model
+    if (config.providers.ollama.fallbackModel) {
+      const fallbackProvider = createOllamaProvider({
+        baseUrl: config.providers.ollama.baseUrl,
+      });
+      // Override the name so gateway treats it as a separate provider
+      (fallbackProvider as { name: string }).name = "ollama-fallback";
+      providers.push(fallbackProvider);
+    }
   }
 
   return providers;
@@ -94,6 +104,8 @@ const defaultModelForProvider = (
   if (name === "anthropic") return config.providers.anthropic.defaultModel;
   if (name === "openrouter") return config.providers.openrouter.defaultModel;
   if (name === "gemini") return config.providers.gemini.defaultModel;
+  if (name === "ollama-fallback")
+    return config.providers.ollama.fallbackModel ?? config.providers.ollama.defaultModel;
   return config.providers.ollama.defaultModel;
 };
 
@@ -584,6 +596,12 @@ const main = async (): Promise<void> => {
 
   const defaultModel = defaultModelForProvider(config, routing.defaultProvider);
 
+  // Build model map for provider-level fallback (each provider gets its own default model)
+  const modelMap: Record<string, string> = {};
+  for (const p of providers) {
+    modelMap[p.name] = defaultModelForProvider(config, p.name);
+  }
+
   const gateway = new ProviderGateway({
     providers,
     routingConfig: {
@@ -591,6 +609,7 @@ const main = async (): Promise<void> => {
       fallbackChain: routing.fallbackChain,
     },
     metrics,
+    modelMap,
   });
 
   // ── Channels ─────────────────────────────────────────────────────────────

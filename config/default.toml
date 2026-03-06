@@ -1,31 +1,33 @@
 [agent]
-name = "Hairy"
-data_dir = "./data"
-max_iterations_per_run = 25
+name = "Moni"
+data_dir = "/home/moni/hairy/data"
+max_iterations_per_run = 20
 max_context_tokens = 100000
 
 [health]
 port = 9090
 
 [channels.telegram]
-enabled = false
+enabled = true
 mode = "bot"
-# session_file used only in mtproto mode
-session_file = "./data/telegram/session.txt"
 
 [channels.whatsapp]
 enabled = false
 
 [channels.webhook]
 enabled = false
-port = 8080
-secret = ""
 
 [channels.cli]
+enabled = false
+
+[providers.ollama]
 enabled = true
+base_url = "http://192.168.1.225:11434"
+default_model = "glm-5:cloud"
+fallback_model = "qwen3.5:9b"
 
 [providers.anthropic]
-enabled = true
+enabled = false
 default_model = "claude-sonnet-4-20250514"
 
 [providers.openrouter]
@@ -36,23 +38,18 @@ default_model = "anthropic/claude-sonnet-4-20250514"
 enabled = false
 default_model = "gemini-2.5-flash"
 
-[providers.ollama]
-enabled = false
-base_url = "http://localhost:11434"
-default_model = "llama3.2"
-
 [routing]
-default_provider = "anthropic"
-fallback_chain = ["anthropic", "gemini", "openrouter", "ollama"]
+default_provider = "ollama"
+fallback_chain = ["ollama", "ollama-fallback"]
 
 [routing.cost]
 track = true
-daily_budget_usd = 10.0
+daily_budget_usd = 0.01
 alert_threshold_pct = 80
 
 [growth]
 reflection_enabled = true
-initiative_enabled = false
+initiative_enabled = true
 skill_auto_promote = false
 
 [tools.bash]
@@ -60,5 +57,5 @@ timeout_ms = 30000
 max_output_bytes = 1048576
 
 [tools.sidecar]
-auto_build = true
-health_check_interval_ms = 30000
+auto_build = false
+health_check_interval_ms = 60000

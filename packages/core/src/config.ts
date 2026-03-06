@@ -6,6 +6,7 @@ import { z } from "zod";
 const providerSchema = z.object({
   enabled: z.boolean().default(false),
   default_model: z.string().min(1),
+  fallback_model: z.string().optional(),
   api_key: z.string().optional(),
   base_url: z.string().url().optional(),
 });

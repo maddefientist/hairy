@@ -1,0 +1,24 @@
+[Unit]
+Description=Moni Agent — Personal Development Assistant (Hairy Framework)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=moni
+WorkingDirectory=/home/moni/hairy
+EnvironmentFile=/home/moni/hairy/.env
+Environment=PATH=/home/moni/.nvm/versions/node/v25.6.1/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+ExecStart=/home/moni/.nvm/versions/node/v25.6.1/bin/node apps/hairy-agent/dist/main.js
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=moni-agent
+
+# Resource limits
+MemoryMax=1G
+CPUQuota=200%
+
+[Install]
+WantedBy=multi-user.target

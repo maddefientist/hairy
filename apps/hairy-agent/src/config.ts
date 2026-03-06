@@ -38,6 +38,7 @@ const runtimeSchema = z.object({
     enabled: z.boolean().optional(),
     baseUrl: z.string().url().optional(),
     model: z.string().optional(),
+    fallbackModel: z.string().optional(),
   }),
   channels: z.object({
     telegramMode: z.enum(["bot", "mtproto"]).optional(),
@@ -62,6 +63,7 @@ const runtimeSchema = z.object({
 interface ProviderRuntimeConfig {
   enabled: boolean;
   defaultModel: string;
+  fallbackModel?: string;
   apiKey?: string;
   baseUrl?: string;
 }
@@ -137,6 +139,7 @@ export const loadHairyConfig = async (): Promise<HairyRuntimeConfig> => {
       enabled: parseBooleanEnv(process.env.OLLAMA_ENABLED),
       baseUrl: process.env.OLLAMA_BASE_URL,
       model: process.env.OLLAMA_MODEL,
+      fallbackModel: process.env.OLLAMA_FALLBACK_MODEL,
     },
     channels: {
       telegramMode:
@@ -181,6 +184,8 @@ export const loadHairyConfig = async (): Promise<HairyRuntimeConfig> => {
     ollama: {
       enabled: runtime.ollama.enabled ?? base.providers.ollama?.enabled ?? false,
       defaultModel: runtime.ollama.model ?? base.providers.ollama?.default_model ?? "llama3.2",
+      fallbackModel:
+        runtime.ollama.fallbackModel ?? base.providers.ollama?.fallback_model ?? undefined,
       baseUrl:
         runtime.ollama.baseUrl ?? base.providers.ollama?.base_url ?? "http://localhost:11434",
     },

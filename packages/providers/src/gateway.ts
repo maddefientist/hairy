@@ -13,6 +13,8 @@ interface ProviderGatewayOptions {
   providers: Provider[];
   routingConfig: RoutingConfig;
   metrics: Metrics;
+  /** Map provider name → default model for that provider (used during fallback) */
+  modelMap?: Record<string, string>;
 }
 
 export class ProviderGateway {
@@ -49,8 +51,12 @@ export class ProviderGateway {
         continue;
       }
 
+      // Use provider-specific model if falling back (allows model-level fallback within same provider)
+      const effectiveModel =
+        name === providerName ? model : (this.opts.modelMap?.[name] ?? model);
+
       let hadError = false;
-      for await (const event of provider.stream(messages, { ...opts, model })) {
+      for await (const event of provider.stream(messages, { ...opts, model: effectiveModel })) {
         if (event.type === "error") {
           hadError = true;
           this.opts.metrics.increment("llm_requests", 1, { provider: name, status: "error" });
