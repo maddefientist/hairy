@@ -47,12 +47,18 @@ import {
   type Tool,
   ToolRegistry,
   createBashTool,
+  createCancelTaskTool,
   createDelegateTool,
   createEditTool,
   createIdentityEvolveTool,
+  createListTasksTool,
   createMemoryIngestTool,
   createMemoryRecallTool,
+  createPauseTaskTool,
   createReadTool,
+  createResumeTaskTool,
+  createScheduleTaskTool,
+  createSendMessageTool,
   createWebSearchTool,
   createWriteTool,
 } from "@hairy/tools";
@@ -601,6 +607,12 @@ const main = async (): Promise<void> => {
   });
 
   // ── Tools ────────────────────────────────────────────────────────────────
+  // Mutable context for send_message tool — set during each handleRun
+  const activeContext: { channelId: string | null; channelType: string | null } = {
+    channelId: null,
+    channelType: null,
+  };
+
   const isOrchestratorMode = config.agentMode === "orchestrator";
   let registry: ToolRegistry;
   let toolDefs: AgentLoopToolDef[];
@@ -657,6 +669,11 @@ const main = async (): Promise<void> => {
     orchestratorRegistry.register(createMemoryRecallTool(memoryBackend));
     orchestratorRegistry.register(createMemoryIngestTool(memoryBackend));
     orchestratorRegistry.register(createIdentityEvolveTool());
+    orchestratorRegistry.register(createScheduleTaskTool(scheduler));
+    orchestratorRegistry.register(createListTasksTool(scheduler));
+    orchestratorRegistry.register(createPauseTaskTool(scheduler));
+    orchestratorRegistry.register(createResumeTaskTool(scheduler));
+    orchestratorRegistry.register(createCancelTaskTool(scheduler));
 
     registry = orchestratorRegistry;
     toolDefs = orchestratorRegistry.list().map(toolToDefinition);
@@ -677,6 +694,11 @@ const main = async (): Promise<void> => {
     registry.register(createMemoryRecallTool(memoryBackend));
     registry.register(createMemoryIngestTool(memoryBackend));
     registry.register(createIdentityEvolveTool());
+    registry.register(createScheduleTaskTool(scheduler));
+    registry.register(createListTasksTool(scheduler));
+    registry.register(createPauseTaskTool(scheduler));
+    registry.register(createResumeTaskTool(scheduler));
+    registry.register(createCancelTaskTool(scheduler));
     toolDefs = registry.list().map(toolToDefinition);
   }
 
@@ -755,12 +777,32 @@ const main = async (): Promise<void> => {
     channelAdapters.push(createCliAdapter());
   }
 
+  // Register send_message tool (needs channel adapters to be built first)
+  registry.register(
+    createSendMessageTool({
+      getChannel: () => {
+        if (!activeContext.channelId) return null;
+        const adapter = channelAdapters.find(
+          (ch) => ch.channelType === activeContext.channelType,
+        ) ?? channelAdapters[0];
+        if (!adapter) return null;
+        return { adapter, channelId: activeContext.channelId };
+      },
+    }),
+  );
+  // Refresh tool defs after adding send_message
+  toolDefs = registry.list().map(toolToDefinition);
+
   // ── Orchestrator ─────────────────────────────────────────────────────────
   const orchestrator = new Orchestrator({
     logger,
     metrics,
     queue,
     handleRun: async (message, traceId) => {
+      // Set active context for send_message tool
+      activeContext.channelId = message.channelId;
+      activeContext.channelType = message.channelType;
+
       await conversation.append(message);
 
       const skillFragments = await skills.getPromptFragments();
