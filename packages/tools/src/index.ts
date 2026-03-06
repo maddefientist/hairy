@@ -8,6 +8,7 @@ export * from "./builtin/web-search.js";
 export * from "./builtin/memory-recall.js";
 export * from "./builtin/memory-ingest.js";
 export * from "./builtin/identity-evolve.js";
+export * from "./builtin/delegate.js";
 export * from "./sidecar/types.js";
 export * from "./sidecar/protocol.js";
 export * from "./sidecar/manager.js";

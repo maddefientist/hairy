@@ -47,6 +47,7 @@ import {
   type Tool,
   ToolRegistry,
   createBashTool,
+  createDelegateTool,
   createEditTool,
   createIdentityEvolveTool,
   createMemoryIngestTool,
@@ -571,17 +572,15 @@ const main = async (): Promise<void> => {
   let lastPromptHash = "";
 
   // ── Tools ────────────────────────────────────────────────────────────────
-  const registry = new ToolRegistry({ logger });
-  registry.register(createBashTool());
-  registry.register(createReadTool());
-  registry.register(createWriteTool());
-  registry.register(createEditTool());
-  registry.register(createWebSearchTool());
-  registry.register(createMemoryRecallTool(memoryBackend));
-  registry.register(createMemoryIngestTool(memoryBackend));
-  registry.register(createIdentityEvolveTool());
+  // Executor tools — these are the "hands" (system interaction)
+  const executorRegistry = new ToolRegistry({ logger });
+  executorRegistry.register(createBashTool());
+  executorRegistry.register(createReadTool());
+  executorRegistry.register(createWriteTool());
+  executorRegistry.register(createEditTool());
+  executorRegistry.register(createWebSearchTool());
 
-  const toolDefs = registry.list().map(toolToDefinition);
+  const executorToolDefs = executorRegistry.list().map(toolToDefinition);
 
   // ── Providers ────────────────────────────────────────────────────────────
   const providers = buildProviders(config);
@@ -595,6 +594,7 @@ const main = async (): Promise<void> => {
   );
 
   const defaultModel = defaultModelForProvider(config, routing.defaultProvider);
+  const executorModel = config.providers.ollama.fallbackModel ?? defaultModel;
 
   // Build model map for provider-level fallback (each provider gets its own default model)
   const modelMap: Record<string, string> = {};
@@ -611,6 +611,53 @@ const main = async (): Promise<void> => {
     metrics,
     modelMap,
   });
+
+  // Build executor provider — uses the fallback model (qwen3.5:9b) directly
+  // Skip the gateway fallback chain — executor goes straight to the local model
+  const executorProviderInstance = providers.find((p) => p.name === "ollama-fallback") ??
+    providers.find((p) => p.name === "ollama");
+
+  const executorProvider = executorProviderInstance
+    ? {
+        stream: (msgs: Parameters<typeof gateway.stream>[0], streamOpts: Parameters<typeof gateway.stream>[1]) =>
+          executorProviderInstance.stream(msgs, { ...streamOpts, model: streamOpts.model ?? executorModel }),
+      }
+    : {
+        stream: (msgs: Parameters<typeof gateway.stream>[0], streamOpts: Parameters<typeof gateway.stream>[1]) =>
+          gateway.stream(msgs, streamOpts),
+      };
+
+  // Executor function for the delegate tool
+  const executorFn = async (name: string, args: unknown, _callId: string) => {
+    const execution = await executorRegistry.execute(name, args, {
+      traceId: "delegate",
+      cwd: process.cwd(),
+      dataDir: config.dataDir,
+      logger,
+      channelId: "delegate",
+    });
+    return { content: execution.content, isError: execution.isError ?? false };
+  };
+
+  // Orchestrator tools — these are the "brain" (planning + delegation + memory)
+  const orchestratorRegistry = new ToolRegistry({ logger });
+  orchestratorRegistry.register(
+    createDelegateTool({
+      executorProvider,
+      executorModel,
+      executorTools: executorToolDefs,
+      executor: executorFn,
+      logger,
+    }),
+  );
+  orchestratorRegistry.register(createMemoryRecallTool(memoryBackend));
+  orchestratorRegistry.register(createMemoryIngestTool(memoryBackend));
+  orchestratorRegistry.register(createIdentityEvolveTool());
+
+  const toolDefs = orchestratorRegistry.list().map(toolToDefinition);
+
+  // Combined registry for legacy compatibility (health endpoint, etc.)
+  const registry = orchestratorRegistry;
 
   // ── Channels ─────────────────────────────────────────────────────────────
   const channelAdapters: ChannelAdapter[] = [];
@@ -722,7 +769,7 @@ const main = async (): Promise<void> => {
             gateway.stream(msgs, { ...streamOpts, route: { intent: "complex" } }),
         },
         executor: async (name, args, _callId) => {
-          const execution = await registry.execute(name, args, {
+          const execution = await orchestratorRegistry.execute(name, args, {
             traceId,
             cwd: process.cwd(),
             dataDir: config.dataDir,
