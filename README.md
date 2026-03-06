@@ -257,9 +257,41 @@ Tools are functions Hairy can call:
 - **write**: Create/write files
 - **edit**: Find-and-replace edits
 - **web-search**: Query the web via DuckDuckGo
+- **delegate**: Send a task to the executor model (orchestrator mode only)
+- **memory_recall**: Semantic search in long-term memory
+- **memory_ingest**: Store knowledge in long-term memory
+- **identity_evolve**: Self-modify identity file with changelog
 - **sidecars**: Custom Rust/Go binaries
 
 All tool inputs are validated with Zod. All executions are logged with trace IDs.
+
+### Agent Modes
+
+#### Unified (default)
+Single model handles everything — reasoning and tool execution. Best when your model is reliable at tool-calling (e.g., Claude, GPT-4).
+
+#### Orchestrator/Executor
+Two-model split for when your primary model is strong at reasoning but unreliable at tool-calling (e.g., cloud models via Ollama proxy that 500-error on tool calls).
+
+```
+Primary model (orchestrator) → thinks, plans, responds
+  └─ delegate tool ──→ Fallback model (executor) → runs tools, follows instructions
+```
+
+Configure in `config/default.toml` or `config/local.toml`:
+```toml
+[agent]
+mode = "orchestrator"
+
+[providers.ollama]
+default_model = "glm-5:cloud"      # Orchestrator (reasoning)
+fallback_model = "qwen3.5:9b"      # Executor (tool-calling)
+```
+
+Or via env var: `HAIRY_AGENT_MODE=orchestrator`
+
+The orchestrator gets: `delegate`, `memory_recall`, `memory_ingest`, `identity_evolve`
+The executor gets: `bash`, `read`, `write`, `edit`, `web-search`
 
 ### Memory
 
@@ -417,6 +449,7 @@ TELEGRAM_BOT_TOKEN=...
 
 ## Architecture Overview
 
+### Unified Mode (default)
 ```
 ┌─────────────────────────────────────┐
 │   Channel Adapters (CLI, TG, WA)   │ ← User messages
@@ -427,6 +460,32 @@ TELEGRAM_BOT_TOKEN=...
 │   Provider Gateway (LLM routing)    │
 ├─────────────────────────────────────┤
 │   Tool Registry + Sidecars          │
+├─────────────────────────────────────┤
+│   Memory (conversation + semantic)  │
+├─────────────────────────────────────┤
+│   Growth (skills, reflection)       │
+└─────────────────────────────────────┘
+```
+
+### Orchestrator Mode (brain/hands split)
+```
+┌─────────────────────────────────────┐
+│   Channel Adapters (CLI, TG, WA)   │ ← User messages
+├─────────────────────────────────────┤
+│   Orchestrator (main run loop)      │
+│   ┌───────────────────────────┐     │
+│   │ Primary Model (reasoning) │     │
+│   │  └─ delegate, memory,    │     │
+│   │     identity tools        │     │
+│   └──────────┬────────────────┘     │
+│              │ delegate             │
+│   ┌──────────▼────────────────┐     │
+│   │ Fallback Model (executor) │     │
+│   │  └─ bash, read, write,   │     │
+│   │     edit, web-search      │     │
+│   └───────────────────────────┘     │
+├─────────────────────────────────────┤
+│   Provider Gateway + Model Fallback │
 ├─────────────────────────────────────┤
 │   Memory (conversation + semantic)  │
 ├─────────────────────────────────────┤
@@ -474,6 +533,8 @@ name = "Hairy"
 data_dir = "./data"
 max_iterations_per_run = 25
 max_context_tokens = 100000
+# mode = "unified"        # Single model does everything (default)
+# mode = "orchestrator"   # Brain/hands split with delegate tool
 
 [health]
 port = 9090
@@ -490,15 +551,40 @@ session_file = "./data/telegram/session.txt"
 enabled = true
 default_model = "claude-sonnet-4-20250514"
 
+[providers.ollama]
+enabled = false
+base_url = "http://localhost:11434"
+default_model = "llama3.2"
+# fallback_model = "llama3.2:3b"  # Executor model in orchestrator mode
+
 [routing]
 default_provider = "anthropic"
 fallback_chain = ["anthropic", "openrouter", "ollama"]
 ```
 
+### `config/local.toml` (gitignored, per-deployment overrides)
+
+Create this file for deployment-specific settings that shouldn't be tracked:
+```toml
+[agent]
+name = "MyAgent"
+mode = "orchestrator"
+
+[providers.ollama]
+enabled = true
+default_model = "glm-5:cloud"
+fallback_model = "qwen3.5:9b"
+```
+
+Merge order: `default.toml` → `local.toml` → env vars.
+
 Override with env vars:
 ```bash
 export HAIRY_HEALTH_PORT=8080
+export HAIRY_AGENT_MODE=orchestrator
 export ANTHROPIC_API_KEY=sk-ant-...
+export OLLAMA_MODEL=glm-5:cloud
+export OLLAMA_FALLBACK_MODEL=qwen3.5:9b
 ```
 
 ### `config/providers.toml`

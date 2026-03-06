@@ -1,33 +1,33 @@
 [agent]
-name = "Moni"
-data_dir = "/home/moni/hairy/data"
-max_iterations_per_run = 20
+name = "Hairy"
+data_dir = "./data"
+max_iterations_per_run = 25
 max_context_tokens = 100000
+# mode = "unified"        # Default: single model does everything
+# mode = "orchestrator"   # Brain/hands split: primary model plans, fallback model executes tools
 
 [health]
 port = 9090
 
-[channels.telegram]
+[channels.cli]
 enabled = true
+
+[channels.telegram]
+enabled = false
 mode = "bot"
+# session_file used only in mtproto mode
+session_file = "./data/telegram/session.txt"
 
 [channels.whatsapp]
 enabled = false
 
 [channels.webhook]
 enabled = false
-
-[channels.cli]
-enabled = false
-
-[providers.ollama]
-enabled = true
-base_url = "http://192.168.1.225:11434"
-default_model = "glm-5:cloud"
-fallback_model = "qwen3.5:9b"
+port = 8080
+secret = ""
 
 [providers.anthropic]
-enabled = false
+enabled = true
 default_model = "claude-sonnet-4-20250514"
 
 [providers.openrouter]
@@ -38,18 +38,24 @@ default_model = "anthropic/claude-sonnet-4-20250514"
 enabled = false
 default_model = "gemini-2.5-flash"
 
+[providers.ollama]
+enabled = false
+base_url = "http://localhost:11434"
+default_model = "llama3.2"
+# fallback_model = "llama3.2:3b"   # Used as executor in orchestrator mode
+
 [routing]
-default_provider = "ollama"
-fallback_chain = ["ollama", "ollama-fallback"]
+default_provider = "anthropic"
+fallback_chain = ["anthropic", "gemini", "openrouter", "ollama"]
 
 [routing.cost]
 track = true
-daily_budget_usd = 0.01
+daily_budget_usd = 10.0
 alert_threshold_pct = 80
 
 [growth]
 reflection_enabled = true
-initiative_enabled = true
+initiative_enabled = false
 skill_auto_promote = false
 
 [tools.bash]
@@ -57,5 +63,5 @@ timeout_ms = 30000
 max_output_bytes = 1048576
 
 [tools.sidecar]
-auto_build = false
-health_check_interval_ms = 60000
+auto_build = true
+health_check_interval_ms = 30000

@@ -17,3 +17,4 @@ dist/
 *.d.ts
 *.d.ts.map
 *.js.map
+config/local.toml

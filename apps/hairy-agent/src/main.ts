@@ -571,17 +571,6 @@ const main = async (): Promise<void> => {
   });
   let lastPromptHash = "";
 
-  // ── Tools ────────────────────────────────────────────────────────────────
-  // Executor tools — these are the "hands" (system interaction)
-  const executorRegistry = new ToolRegistry({ logger });
-  executorRegistry.register(createBashTool());
-  executorRegistry.register(createReadTool());
-  executorRegistry.register(createWriteTool());
-  executorRegistry.register(createEditTool());
-  executorRegistry.register(createWebSearchTool());
-
-  const executorToolDefs = executorRegistry.list().map(toolToDefinition);
-
   // ── Providers ────────────────────────────────────────────────────────────
   const providers = buildProviders(config);
   if (providers.length === 0) {
@@ -594,7 +583,6 @@ const main = async (): Promise<void> => {
   );
 
   const defaultModel = defaultModelForProvider(config, routing.defaultProvider);
-  const executorModel = config.providers.ollama.fallbackModel ?? defaultModel;
 
   // Build model map for provider-level fallback (each provider gets its own default model)
   const modelMap: Record<string, string> = {};
@@ -612,52 +600,85 @@ const main = async (): Promise<void> => {
     modelMap,
   });
 
-  // Build executor provider — uses the fallback model (qwen3.5:9b) directly
-  // Skip the gateway fallback chain — executor goes straight to the local model
-  const executorProviderInstance = providers.find((p) => p.name === "ollama-fallback") ??
-    providers.find((p) => p.name === "ollama");
+  // ── Tools ────────────────────────────────────────────────────────────────
+  const isOrchestratorMode = config.agentMode === "orchestrator";
+  let registry: ToolRegistry;
+  let toolDefs: AgentLoopToolDef[];
 
-  const executorProvider = executorProviderInstance
-    ? {
-        stream: (msgs: Parameters<typeof gateway.stream>[0], streamOpts: Parameters<typeof gateway.stream>[1]) =>
-          executorProviderInstance.stream(msgs, { ...streamOpts, model: streamOpts.model ?? executorModel }),
-      }
-    : {
-        stream: (msgs: Parameters<typeof gateway.stream>[0], streamOpts: Parameters<typeof gateway.stream>[1]) =>
-          gateway.stream(msgs, streamOpts),
-      };
+  if (isOrchestratorMode && config.providers.ollama.fallbackModel) {
+    // ── Orchestrator/Executor split ──
+    // Orchestrator (primary model) gets: delegate + memory tools
+    // Executor (fallback model) gets: system tools (bash, read, write, edit, web-search)
+    const executorModel = config.providers.ollama.fallbackModel;
 
-  // Executor function for the delegate tool
-  const executorFn = async (name: string, args: unknown, _callId: string) => {
-    const execution = await executorRegistry.execute(name, args, {
-      traceId: "delegate",
-      cwd: process.cwd(),
-      dataDir: config.dataDir,
-      logger,
-      channelId: "delegate",
-    });
-    return { content: execution.content, isError: execution.isError ?? false };
-  };
+    const executorRegistry = new ToolRegistry({ logger });
+    executorRegistry.register(createBashTool());
+    executorRegistry.register(createReadTool());
+    executorRegistry.register(createWriteTool());
+    executorRegistry.register(createEditTool());
+    executorRegistry.register(createWebSearchTool());
+    const executorToolDefs = executorRegistry.list().map(toolToDefinition);
 
-  // Orchestrator tools — these are the "brain" (planning + delegation + memory)
-  const orchestratorRegistry = new ToolRegistry({ logger });
-  orchestratorRegistry.register(
-    createDelegateTool({
-      executorProvider,
-      executorModel,
-      executorTools: executorToolDefs,
-      executor: executorFn,
-      logger,
-    }),
-  );
-  orchestratorRegistry.register(createMemoryRecallTool(memoryBackend));
-  orchestratorRegistry.register(createMemoryIngestTool(memoryBackend));
-  orchestratorRegistry.register(createIdentityEvolveTool());
+    // Executor provider — goes straight to fallback model, no gateway fallback chain
+    const executorProviderInstance = providers.find((p) => p.name === "ollama-fallback") ??
+      providers.find((p) => p.name === "ollama");
 
-  const toolDefs = orchestratorRegistry.list().map(toolToDefinition);
+    const executorProvider = executorProviderInstance
+      ? {
+          stream: (msgs: Parameters<typeof gateway.stream>[0], streamOpts: Parameters<typeof gateway.stream>[1]) =>
+            executorProviderInstance.stream(msgs, { ...streamOpts, model: streamOpts.model ?? executorModel }),
+        }
+      : {
+          stream: (msgs: Parameters<typeof gateway.stream>[0], streamOpts: Parameters<typeof gateway.stream>[1]) =>
+            gateway.stream(msgs, streamOpts),
+        };
 
-  // Combined registry for legacy compatibility (health endpoint, etc.)
-  const registry = orchestratorRegistry;
+    const executorFn = async (name: string, args: unknown, _callId: string) => {
+      const execution = await executorRegistry.execute(name, args, {
+        traceId: "delegate",
+        cwd: process.cwd(),
+        dataDir: config.dataDir,
+        logger,
+        channelId: "delegate",
+      });
+      return { content: execution.content, isError: execution.isError ?? false };
+    };
+
+    const orchestratorRegistry = new ToolRegistry({ logger });
+    orchestratorRegistry.register(
+      createDelegateTool({
+        executorProvider,
+        executorModel,
+        executorTools: executorToolDefs,
+        executor: executorFn,
+        logger,
+      }),
+    );
+    orchestratorRegistry.register(createMemoryRecallTool(memoryBackend));
+    orchestratorRegistry.register(createMemoryIngestTool(memoryBackend));
+    orchestratorRegistry.register(createIdentityEvolveTool());
+
+    registry = orchestratorRegistry;
+    toolDefs = orchestratorRegistry.list().map(toolToDefinition);
+
+    logger.info(
+      { orchestratorModel: defaultModel, executorModel },
+      "orchestrator/executor mode: primary model plans, fallback model executes",
+    );
+  } else {
+    // ── Unified mode (default) ──
+    // Single model gets all tools directly
+    registry = new ToolRegistry({ logger });
+    registry.register(createBashTool());
+    registry.register(createReadTool());
+    registry.register(createWriteTool());
+    registry.register(createEditTool());
+    registry.register(createWebSearchTool());
+    registry.register(createMemoryRecallTool(memoryBackend));
+    registry.register(createMemoryIngestTool(memoryBackend));
+    registry.register(createIdentityEvolveTool());
+    toolDefs = registry.list().map(toolToDefinition);
+  }
 
   // ── Channels ─────────────────────────────────────────────────────────────
   const channelAdapters: ChannelAdapter[] = [];
@@ -769,7 +790,7 @@ const main = async (): Promise<void> => {
             gateway.stream(msgs, { ...streamOpts, route: { intent: "complex" } }),
         },
         executor: async (name, args, _callId) => {
-          const execution = await orchestratorRegistry.execute(name, args, {
+          const execution = await registry.execute(name, args, {
             traceId,
             cwd: process.cwd(),
             dataDir: config.dataDir,

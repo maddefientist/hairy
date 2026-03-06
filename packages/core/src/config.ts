@@ -69,6 +69,8 @@ const configSchema = z.object({
     data_dir: z.string().default("./data"),
     max_iterations_per_run: z.number().int().positive().default(25),
     max_context_tokens: z.number().int().positive().default(100000),
+    /** "unified" = single model does everything (default). "orchestrator" = brain/hands split. */
+    mode: z.enum(["unified", "orchestrator"]).default("unified"),
   }),
   health: z.object({
     port: z.number().int().positive().default(9090),
@@ -164,13 +166,18 @@ const mergeObjects = (
 
 export const loadConfig = async (configDir = "config"): Promise<HairyConfig> => {
   const defaults = await parseTomlFile(join(configDir, "default.toml"));
+  const local = await parseTomlFile(join(configDir, "local.toml"));
 
   const envOverride: Record<string, unknown> = {
+    agent: {
+      mode: process.env.HAIRY_AGENT_MODE ?? undefined,
+    },
     health: {
       port: process.env.HAIRY_HEALTH_PORT ? Number(process.env.HAIRY_HEALTH_PORT) : undefined,
     },
   };
 
-  const merged = mergeObjects(defaults, envOverride);
+  // Merge order: default.toml → local.toml → env vars
+  const merged = mergeObjects(mergeObjects(defaults, local), envOverride);
   return configSchema.parse(merged);
 };

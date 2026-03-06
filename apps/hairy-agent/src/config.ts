@@ -70,6 +70,7 @@ interface ProviderRuntimeConfig {
 
 export interface HairyRuntimeConfig {
   agentName: string;
+  agentMode: "unified" | "orchestrator";
   dataDir: string;
   healthPort: number;
   configDir: string;
@@ -204,6 +205,7 @@ export const loadHairyConfig = async (): Promise<HairyRuntimeConfig> => {
 
   return {
     agentName: base.agent.name,
+    agentMode: (process.env.HAIRY_AGENT_MODE as "unified" | "orchestrator" | undefined) ?? base.agent.mode,
     dataDir: base.agent.data_dir,
     healthPort: base.health.port,
     configDir,
