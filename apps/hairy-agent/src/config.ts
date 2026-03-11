@@ -81,6 +81,7 @@ export interface HairyRuntimeConfig {
   routing: {
     defaultProvider: string;
     fallbackChain: string[];
+    modelFallbackChain: string[];
   };
   channels: {
     cli: { enabled: boolean };
@@ -113,6 +114,23 @@ export interface HairyRuntimeConfig {
     reflectionEnabled: boolean;
     initiativeEnabled: boolean;
     skillAutoPromote: boolean;
+  };
+  resilience: {
+    cooldownBaseMs: number;
+    cooldownMaxMs: number;
+    cooldownThreshold: number;
+    requestTimeoutMs: number;
+  };
+  delivery: {
+    maxAttempts: number;
+    baseRetryMs: number;
+    maxRetryMs: number;
+  };
+  memory: {
+    autoPreload: boolean;
+    preloadTopK: number;
+    preloadMinScore: number;
+    preloadMaxChars: number;
   };
   tools: {
     sidecarAutoBuild: boolean;
@@ -207,6 +225,7 @@ export const loadHairyConfig = async (): Promise<HairyRuntimeConfig> => {
     routing: {
       defaultProvider: base.routing.default_provider,
       fallbackChain: base.routing.fallback_chain,
+      modelFallbackChain: base.providers.ollama?.model_fallback_chain ?? [],
     },
     channels: {
       cli: {
@@ -249,6 +268,23 @@ export const loadHairyConfig = async (): Promise<HairyRuntimeConfig> => {
       reflectionEnabled: base.growth.reflection_enabled,
       initiativeEnabled: base.growth.initiative_enabled,
       skillAutoPromote: base.growth.skill_auto_promote,
+    },
+    resilience: {
+      cooldownBaseMs: base.resilience.cooldown_base_ms,
+      cooldownMaxMs: base.resilience.cooldown_max_ms,
+      cooldownThreshold: base.resilience.cooldown_threshold,
+      requestTimeoutMs: base.resilience.request_timeout_ms,
+    },
+    delivery: {
+      maxAttempts: base.delivery.max_attempts,
+      baseRetryMs: base.delivery.base_retry_ms,
+      maxRetryMs: base.delivery.max_retry_ms,
+    },
+    memory: {
+      autoPreload: base.memory.auto_preload,
+      preloadTopK: base.memory.preload_top_k,
+      preloadMinScore: base.memory.preload_min_score,
+      preloadMaxChars: base.memory.preload_max_chars,
     },
     tools: {
       sidecarAutoBuild: base.tools.sidecar.auto_build,

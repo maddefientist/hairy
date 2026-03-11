@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { type HairyLogger, type Metrics, createTrace } from "@hairy/observability";
+import type { PluginContext, PluginRunner } from "./plugin.js";
 import type { TaskQueue } from "./task-queue.js";
 import type {
   AgentResponse,
@@ -14,7 +15,12 @@ interface OrchestratorDeps {
   logger: HairyLogger;
   metrics: Metrics;
   queue: TaskQueue;
-  handleRun: (message: HairyMessage, traceId: string) => Promise<AgentResponse>;
+  plugins?: PluginRunner;
+  handleRun: (
+    message: HairyMessage,
+    traceId: string,
+    pluginCtx: PluginContext,
+  ) => Promise<AgentResponse>;
 }
 
 const emptyUsage = (): TokenUsage => ({
@@ -83,9 +89,31 @@ export class Orchestrator {
         const startedAt = Date.now();
         const trace = createTrace();
         const toolCalls: ToolCallRecord[] = [];
+        const pluginCtx: PluginContext = {
+          traceId: trace.traceId,
+          channelType: message.channelType,
+          channelId: message.channelId,
+          senderId: message.senderId,
+          state: new Map<string, unknown>(),
+          logger: this.deps.logger,
+        };
+
+        let effectiveMessage: HairyMessage | null = message;
+        if (this.deps.plugins) {
+          effectiveMessage = await this.deps.plugins.runOnUserMessage(message, pluginCtx);
+          if (effectiveMessage === null) {
+            this.deps.logger.info(
+              { traceId: trace.traceId, channelType: message.channelType },
+              "message blocked by plugin",
+            );
+            continue;
+          }
+
+          await this.deps.plugins.runOnRunStart(pluginCtx);
+        }
 
         try {
-          const response = await this.deps.handleRun(message, trace.traceId);
+          const response = await this.deps.handleRun(effectiveMessage, trace.traceId, pluginCtx);
           const runResult: RunResult = {
             traceId: trace.traceId,
             response,
@@ -94,10 +122,23 @@ export class Orchestrator {
             usage: emptyUsage(),
             durationMs: Date.now() - startedAt,
           };
+
+          if (this.deps.plugins) {
+            await this.deps.plugins.runOnRunEnd(pluginCtx, runResult, undefined);
+          }
+
           this.logRun(runResult);
         } catch (error: unknown) {
-          this.deps.logger.error({ err: error, traceId: trace.traceId }, "orchestrator run failed");
+          const runError = error instanceof Error ? error : new Error(String(error));
+          this.deps.logger.error(
+            { err: runError, traceId: trace.traceId },
+            "orchestrator run failed",
+          );
           this.deps.metrics.increment("messages_out", 1, { status: "error" });
+
+          if (this.deps.plugins) {
+            await this.deps.plugins.runOnRunEnd(pluginCtx, undefined, runError);
+          }
         }
       }
     } finally {

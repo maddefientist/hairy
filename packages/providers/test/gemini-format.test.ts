@@ -54,6 +54,22 @@ describe("createGeminiProvider", () => {
     expect(events[0]?.error).toContain("401");
   });
 
+  it("yields timeout error when request is aborted", async () => {
+    const provider = createGeminiProvider({ apiKey: "test-key" });
+    global.fetch = vi.fn().mockRejectedValue(new Error("request aborted"));
+
+    const events = [];
+    for await (const event of provider.stream(
+      [{ role: "user", content: [{ type: "text", text: "hi" }] }],
+      { model: "gemini-2.0-flash", timeoutMs: 777 },
+    )) {
+      events.push(event);
+    }
+
+    expect(events[0]?.type).toBe("error");
+    expect(events[0]?.error).toContain("request timed out after 777ms");
+  });
+
   it("yields text_delta and stop for plain text response", async () => {
     const provider = createGeminiProvider({ apiKey: "test-key" });
     global.fetch = vi.fn().mockResolvedValue({

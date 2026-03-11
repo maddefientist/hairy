@@ -45,6 +45,22 @@ describe("createAnthropicProvider", () => {
     expect(events[0]?.error).toContain("429");
   });
 
+  it("yields timeout error when request is aborted", async () => {
+    const provider = createAnthropicProvider({ apiKey: "test-key" });
+    global.fetch = vi.fn().mockRejectedValue(new Error("timeout while waiting for response"));
+
+    const events = [];
+    for await (const event of provider.stream(
+      [{ role: "user", content: [{ type: "text", text: "hi" }] }],
+      { model: "claude-test", timeoutMs: 1234 },
+    )) {
+      events.push(event);
+    }
+
+    expect(events[0]?.type).toBe("error");
+    expect(events[0]?.error).toContain("request timed out after 1234ms");
+  });
+
   it("yields text_delta and stop for plain text response", async () => {
     const provider = createAnthropicProvider({ apiKey: "test-key" });
 

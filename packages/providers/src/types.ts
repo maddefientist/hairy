@@ -43,6 +43,7 @@ export interface StreamOptions {
   tools?: ToolDefinition[];
   systemPrompt?: string;
   thinkingLevel?: "off" | "low" | "medium" | "high";
+  timeoutMs?: number;
 }
 
 export interface ModelInfo {
@@ -70,8 +71,15 @@ export interface RouteRequest {
   maxCostUsd?: number;
 }
 
+export interface ModelFallback {
+  provider: string;
+  model: string;
+  timeoutMs?: number;
+}
+
 export interface RoutingConfig {
   defaultProvider: string;
   fallbackChain: string[];
+  modelFallbackChain?: ModelFallback[];
   rules?: Record<string, { provider: string; model: string }>;
 }

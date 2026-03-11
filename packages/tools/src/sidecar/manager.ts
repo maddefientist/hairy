@@ -55,7 +55,7 @@ export class SidecarManager {
   constructor(private readonly opts: SidecarManagerOptions) {}
 
   async loadAll(sidecarsDir: string): Promise<void> {
-    const candidateDirs = ["example-rust", "example-go"];
+    const candidateDirs = ["example-rust", "example-go", "browser"];
     for (const name of candidateDirs) {
       const dir = join(sidecarsDir, name);
       const manifestPath = join(dir, "manifest.json");

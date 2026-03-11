@@ -1,0 +1,25 @@
+[Unit]
+Description=Hairy Agent Daemon
+After=network-online.target ollama.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/aghari/hairy
+EnvironmentFile=/home/aghari/hairy/.env
+ExecStart=/usr/bin/node apps/hairy-agent/dist/main.js
+Restart=on-failure
+RestartSec=10
+WatchdogSec=120
+
+# Resource limits
+MemoryMax=2G
+CPUQuota=200%
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=hairy-agent
+
+[Install]
+WantedBy=default.target

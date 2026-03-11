@@ -16,6 +16,12 @@ export interface SystemPromptOptions {
   channel?: string;
   /** Optional skill fragments (pre-rendered) */
   skillFragments?: string[];
+  /** Injected onboarding instructions for new users */
+  onboardingContext?: string;
+  /** Current user's preferred name */
+  userName?: string;
+  /** Known user preferences */
+  userPreferences?: Record<string, string>;
 }
 
 export const buildSystemPrompt = async (opts: SystemPromptOptions): Promise<string> => {
@@ -48,6 +54,25 @@ export const buildSystemPrompt = async (opts: SystemPromptOptions): Promise<stri
 
   if (opts.skillFragments && opts.skillFragments.length > 0) {
     parts.push("", "## Active Skills", opts.skillFragments.join("\n"));
+  }
+
+  if (opts.userName) {
+    parts.push("", "## Current User", `Name: ${opts.userName}`);
+    if (opts.userPreferences && Object.keys(opts.userPreferences).length > 0) {
+      parts.push("Preferences:");
+      for (const [k, v] of Object.entries(opts.userPreferences)) {
+        parts.push(`- ${k}: ${v}`);
+      }
+    }
+  }
+
+  if (opts.onboardingContext) {
+    parts.push(
+      "",
+      "## ONBOARDING TASK (high priority)",
+      "This user is new. Follow these instructions for your response:",
+      opts.onboardingContext,
+    );
   }
 
   parts.push(

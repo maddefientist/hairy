@@ -171,14 +171,24 @@ export const createGeminiProvider = (opts: GeminiOptions = {}): Provider => {
 
       const url = `${baseUrl}/models/${streamOpts.model}:generateContent?key=${apiKey}`;
 
+      const timeoutMs = streamOpts.timeoutMs ?? 120_000;
+
       let response: Response;
       try {
         response = await fetch(url, {
           method: "POST",
           headers: { "content-type": "application/json" },
           body: JSON.stringify(body),
+          signal: AbortSignal.timeout(timeoutMs),
         });
       } catch (err: unknown) {
+        const message =
+          err instanceof Error ? err.message.toLowerCase() : String(err).toLowerCase();
+        if (message.includes("abort") || message.includes("timeout")) {
+          yield { type: "error", error: `request timed out after ${timeoutMs}ms` };
+          return;
+        }
+
         const msg = err instanceof Error ? err.message : "network error";
         yield { type: "error", error: `gemini unreachable: ${msg}` };
         return;

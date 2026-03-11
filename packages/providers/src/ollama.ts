@@ -208,14 +208,27 @@ export const createOllamaProvider = (opts: OllamaOptions = {}): Provider => {
         requestBody.tools = toOllamaTools(streamOpts.tools);
       }
 
+      const timeoutMs = streamOpts.timeoutMs ?? 120_000;
+
       let response: Awaited<ReturnType<typeof fetch>>;
       try {
         response = await fetch(`${baseUrl.replace(/\/$/, "")}/api/chat`, {
           method: "POST",
           headers: { "content-type": "application/json" },
           body: JSON.stringify(requestBody),
+          signal: AbortSignal.timeout(timeoutMs),
         });
       } catch (error: unknown) {
+        const message =
+          error instanceof Error ? error.message.toLowerCase() : String(error).toLowerCase();
+        if (message.includes("abort") || message.includes("timeout")) {
+          yield {
+            type: "error",
+            error: `request timed out after ${timeoutMs}ms`,
+          };
+          return;
+        }
+
         yield {
           type: "error",
           error: `ollama unreachable: ${error instanceof Error ? error.message : "request failed"}`,

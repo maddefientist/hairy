@@ -8,6 +8,7 @@ const providerSchema = z.object({
   default_model: z.string().min(1),
   api_key: z.string().optional(),
   base_url: z.string().url().optional(),
+  model_fallback_chain: z.array(z.string().min(1)).optional(),
 });
 
 const channelsSchema = z.object({
@@ -62,6 +63,26 @@ const toolsSchema = z.object({
     .default({ auto_build: true, health_check_interval_ms: 30000 }),
 });
 
+const resilienceSchema = z.object({
+  cooldown_base_ms: z.number().int().positive().default(15_000),
+  cooldown_max_ms: z.number().int().positive().default(300_000),
+  cooldown_threshold: z.number().int().positive().default(1),
+  request_timeout_ms: z.number().int().positive().default(120_000),
+});
+
+const deliverySchema = z.object({
+  max_attempts: z.number().int().positive().default(5),
+  base_retry_ms: z.number().int().positive().default(5_000),
+  max_retry_ms: z.number().int().positive().default(300_000),
+});
+
+const memorySchema = z.object({
+  auto_preload: z.boolean().default(true),
+  preload_top_k: z.number().int().positive().default(3),
+  preload_min_score: z.number().min(0).max(1).default(0.3),
+  preload_max_chars: z.number().int().positive().default(2_000),
+});
+
 const configSchema = z.object({
   agent: z.object({
     name: z.string().default("Hairy"),
@@ -111,6 +132,23 @@ const configSchema = z.object({
     reflection_enabled: true,
     initiative_enabled: false,
     skill_auto_promote: false,
+  }),
+  resilience: resilienceSchema.default({
+    cooldown_base_ms: 15_000,
+    cooldown_max_ms: 300_000,
+    cooldown_threshold: 1,
+    request_timeout_ms: 120_000,
+  }),
+  delivery: deliverySchema.default({
+    max_attempts: 5,
+    base_retry_ms: 5_000,
+    max_retry_ms: 300_000,
+  }),
+  memory: memorySchema.default({
+    auto_preload: true,
+    preload_top_k: 3,
+    preload_min_score: 0.3,
+    preload_max_chars: 2_000,
   }),
   tools: toolsSchema.default({
     bash: { timeout_ms: 30000, max_output_bytes: 1_048_576 },

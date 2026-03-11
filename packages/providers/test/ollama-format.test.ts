@@ -39,6 +39,22 @@ describe("createOllamaProvider", () => {
     expect(events[0]?.error).toContain("500");
   });
 
+  it("yields timeout error when request is aborted", async () => {
+    const provider = createOllamaProvider({ baseUrl: "http://localhost:11434" });
+    global.fetch = vi.fn().mockRejectedValue(new Error("The operation was aborted due to timeout"));
+
+    const events = [];
+    for await (const event of provider.stream(
+      [{ role: "user", content: [{ type: "text", text: "hi" }] }],
+      { model: "llama3.1", timeoutMs: 250 },
+    )) {
+      events.push(event);
+    }
+
+    expect(events[0]?.type).toBe("error");
+    expect(events[0]?.error).toContain("request timed out after 250ms");
+  });
+
   it("yields text_delta and stop for plain text response", async () => {
     const provider = createOllamaProvider({ baseUrl: "http://localhost:11434" });
     global.fetch = vi.fn().mockResolvedValue({

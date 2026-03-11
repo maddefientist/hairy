@@ -35,6 +35,22 @@ describe("createOpenRouterProvider", () => {
     expect(events[0]?.error).toContain("503");
   });
 
+  it("yields timeout error when request is aborted", async () => {
+    const provider = createOpenRouterProvider({ apiKey: "test-key" });
+    global.fetch = vi.fn().mockRejectedValue(new Error("operation timeout"));
+
+    const events = [];
+    for await (const event of provider.stream(
+      [{ role: "user", content: [{ type: "text", text: "hi" }] }],
+      { model: "gpt-4o", timeoutMs: 42 },
+    )) {
+      events.push(event);
+    }
+
+    expect(events[0]?.type).toBe("error");
+    expect(events[0]?.error).toContain("request timed out after 42ms");
+  });
+
   it("yields text_delta and stop for a plain text response", async () => {
     const provider = createOpenRouterProvider({ apiKey: "test-key" });
     global.fetch = vi.fn().mockResolvedValue({

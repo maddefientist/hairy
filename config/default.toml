@@ -40,6 +40,9 @@ default_model = "gemini-2.5-flash"
 enabled = false
 base_url = "http://localhost:11434"
 default_model = "llama3.2"
+# Per-model fallback chain (tried in order, cross-provider).
+# Format: "provider/model"
+model_fallback_chain = []
 
 [routing]
 default_provider = "anthropic"
@@ -54,6 +57,27 @@ alert_threshold_pct = 80
 reflection_enabled = true
 initiative_enabled = false
 skill_auto_promote = false
+
+[resilience]
+# Auth profile cooldown settings
+cooldown_base_ms = 15000
+cooldown_max_ms = 300000
+cooldown_threshold = 1
+# Per-request LLM timeout
+request_timeout_ms = 120000
+
+[delivery]
+# Outbound message retry
+max_attempts = 5
+base_retry_ms = 5000
+max_retry_ms = 300000
+
+[memory]
+# Auto-preload relevant memories into system prompt
+auto_preload = true
+preload_top_k = 3
+preload_min_score = 0.3
+preload_max_chars = 2000
 
 [tools.bash]
 timeout_ms = 30000

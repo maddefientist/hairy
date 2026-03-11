@@ -141,15 +141,34 @@ export const createOpenRouterProvider = (opts: OpenRouterOptions = {}): Provider
         body.tools = toOpenAiTools(streamOpts.tools);
       }
 
-      const response = await fetch(`${baseUrl}/chat/completions`, {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          authorization: `Bearer ${apiKey}`,
-          "x-title": "Hairy Agent",
-        },
-        body: JSON.stringify(body),
-      });
+      const timeoutMs = streamOpts.timeoutMs ?? 120_000;
+
+      let response: Response;
+      try {
+        response = await fetch(`${baseUrl}/chat/completions`, {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            authorization: `Bearer ${apiKey}`,
+            "x-title": "Hairy Agent",
+          },
+          body: JSON.stringify(body),
+          signal: AbortSignal.timeout(timeoutMs),
+        });
+      } catch (error: unknown) {
+        const message =
+          error instanceof Error ? error.message.toLowerCase() : String(error).toLowerCase();
+        if (message.includes("abort") || message.includes("timeout")) {
+          yield { type: "error", error: `request timed out after ${timeoutMs}ms` };
+          return;
+        }
+
+        yield {
+          type: "error",
+          error: `openrouter unreachable: ${error instanceof Error ? error.message : "request failed"}`,
+        };
+        return;
+      }
 
       if (!response.ok) {
         const errorBody = await response.text().catch(() => "unknown");

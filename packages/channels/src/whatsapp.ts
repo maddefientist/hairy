@@ -221,9 +221,8 @@ export class WhatsAppAdapter extends BaseAdapter {
   async disconnect(): Promise<void> {
     this.stopping = true;
     if (this.sock) {
-      await this.sock.logout().catch(() => {
-        // Logout may fail if already disconnected — ignore
-      });
+      // Only close the websocket — do NOT call logout() which permanently
+      // unlinks the device from WhatsApp and destroys the session.
       this.sock.end(undefined);
       this.sock = null;
     }
@@ -247,6 +246,7 @@ export class WhatsAppAdapter extends BaseAdapter {
       }
     } catch (err: unknown) {
       this.opts.logger.error({ err, channelId }, "whatsapp: failed to send message");
+      throw err instanceof Error ? err : new Error(String(err));
     }
   }
 

@@ -3,7 +3,9 @@ import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import {
   type ChannelAdapter,
+  DeliveryQueue,
   createCliAdapter,
+  createOnboardingManager,
   createTelegramAdapter,
   createWebhookAdapter,
   createWhatsAppAdapter,
@@ -11,7 +13,10 @@ import {
 import {
   type AgentLoopMessage,
   type AgentLoopToolDef,
+  CommandRouter,
+  type HairyPlugin,
   Orchestrator,
+  PluginRunner,
   type ScheduledTask,
   Scheduler,
   TaskQueue,
@@ -32,9 +37,11 @@ import {
   ReflectionEngine,
   SemanticMemory,
   createMemoryBackend,
+  createMemoryPreloadPlugin,
 } from "@hairy/memory";
 import { type HairyLogger, Metrics, createLogger } from "@hairy/observability";
 import {
+  AuthProfileManager,
   type Provider,
   ProviderGateway,
   createAnthropicProvider,
@@ -46,14 +53,20 @@ import {
   SidecarManager,
   type Tool,
   ToolRegistry,
+  checkReminders,
   createBashTool,
+  createBrowserTool,
   createEditTool,
   createIdentityEvolveTool,
   createMemoryIngestTool,
   createMemoryRecallTool,
+  createPdfExtractTool,
   createReadTool,
+  createReminderTool,
+  createWebFetchTool,
   createWebSearchTool,
   createWriteTool,
+  setReminderCallback,
 } from "@hairy/tools";
 import { z } from "zod";
 import { loadHairyConfig } from "./config.js";
@@ -100,7 +113,11 @@ const defaultModelForProvider = (
 const resolveRouting = (
   config: Awaited<ReturnType<typeof loadHairyConfig>>,
   providerNames: string[],
-): { defaultProvider: string; fallbackChain: string[] } => {
+): {
+  defaultProvider: string;
+  fallbackChain: string[];
+  modelFallbackChain: Array<{ provider: string; model: string }>;
+} => {
   const available = new Set(providerNames);
   const defaultProvider = available.has(config.routing.defaultProvider)
     ? config.routing.defaultProvider
@@ -114,7 +131,24 @@ const resolveRouting = (
     }
   }
 
-  return { defaultProvider, fallbackChain };
+  const modelFallbackChain = config.routing.modelFallbackChain
+    .map((entry) => {
+      const separator = entry.indexOf("/");
+      if (separator <= 0) {
+        return null;
+      }
+
+      const provider = entry.slice(0, separator).trim();
+      const model = entry.slice(separator + 1).trim();
+      if (!provider || !model || !available.has(provider)) {
+        return null;
+      }
+
+      return { provider, model };
+    })
+    .filter((entry): entry is { provider: string; model: string } => entry !== null);
+
+  return { defaultProvider, fallbackChain, modelFallbackChain };
 };
 
 /** Convert a Tool (Zod schema) → AgentLoopToolDef (JSON schema) for the LLM */
@@ -565,6 +599,10 @@ const main = async (): Promise<void> => {
   registry.register(createWriteTool());
   registry.register(createEditTool());
   registry.register(createWebSearchTool());
+  registry.register(createWebFetchTool());
+  registry.register(createBrowserTool());
+  registry.register(createReminderTool());
+  registry.register(createPdfExtractTool());
   registry.register(createMemoryRecallTool(memoryBackend));
   registry.register(createMemoryIngestTool(memoryBackend));
   registry.register(createIdentityEvolveTool());
@@ -582,16 +620,96 @@ const main = async (): Promise<void> => {
     providers.map((provider) => provider.name),
   );
 
-  const defaultModel = defaultModelForProvider(config, routing.defaultProvider);
+  const modelAliases = new Set<string>();
+  const providerDefaultModels = new Map<string, string>();
+  for (const provider of providers) {
+    const model = defaultModelForProvider(config, provider.name);
+    providerDefaultModels.set(provider.name, model);
+    modelAliases.add(`${provider.name}/${model}`);
+  }
+  for (const candidate of config.routing.modelFallbackChain) {
+    modelAliases.add(candidate);
+  }
 
-  const gateway = new ProviderGateway({
-    providers,
-    routingConfig: {
-      defaultProvider: routing.defaultProvider,
-      fallbackChain: routing.fallbackChain,
-    },
-    metrics,
+  let activePrimaryModel = `${routing.defaultProvider}/${
+    providerDefaultModels.get(routing.defaultProvider) ??
+    defaultModelForProvider(config, routing.defaultProvider)
+  }`;
+
+  const authProfiles = new AuthProfileManager({
+    filePath: join(config.dataDir, "providers", "auth-profiles.json"),
+    baseCooldownMs: config.resilience.cooldownBaseMs,
+    maxCooldownMs: config.resilience.cooldownMaxMs,
+    cooldownThreshold: config.resilience.cooldownThreshold,
+    logger,
   });
+  await authProfiles.load();
+
+  if (config.providers.anthropic.enabled && config.providers.anthropic.apiKey) {
+    authProfiles.addProfile({
+      id: "anthropic:env",
+      provider: "anthropic",
+      type: "api_key",
+      credential: config.providers.anthropic.apiKey,
+    });
+  }
+
+  if (config.providers.openrouter.enabled && config.providers.openrouter.apiKey) {
+    authProfiles.addProfile({
+      id: "openrouter:env",
+      provider: "openrouter",
+      type: "api_key",
+      credential: config.providers.openrouter.apiKey,
+    });
+  }
+
+  if (config.providers.gemini.enabled && config.providers.gemini.apiKey) {
+    authProfiles.addProfile({
+      id: "gemini:env",
+      provider: "gemini",
+      type: "api_key",
+      credential: config.providers.gemini.apiKey,
+    });
+  }
+
+  if (config.providers.ollama.enabled) {
+    authProfiles.addProfile({
+      id: "ollama:local",
+      provider: "ollama",
+      type: "none",
+      credential: "local",
+    });
+  }
+
+  await authProfiles.save();
+
+  const buildGatewayForModel = (provider: string, model: string): ProviderGateway => {
+    const fallbackChain = [
+      provider,
+      ...routing.fallbackChain.filter((entry) => entry !== provider),
+    ];
+
+    const configuredModelFallback =
+      routing.modelFallbackChain.length > 0
+        ? [
+            { provider, model, timeoutMs: config.resilience.requestTimeoutMs },
+            ...routing.modelFallbackChain.filter(
+              (entry) => !(entry.provider === provider && entry.model === model),
+            ),
+          ]
+        : undefined;
+
+    return new ProviderGateway({
+      providers,
+      routingConfig: {
+        defaultProvider: provider,
+        fallbackChain,
+        ...(configuredModelFallback ? { modelFallbackChain: configuredModelFallback } : {}),
+      },
+      metrics,
+      authProfiles,
+    });
+  };
 
   // ── Channels ─────────────────────────────────────────────────────────────
   const channelAdapters: ChannelAdapter[] = [];
@@ -668,12 +786,169 @@ const main = async (): Promise<void> => {
     channelAdapters.push(createCliAdapter());
   }
 
+  // ── Onboarding ────────────────────────────────────────────────────────
+  const onboarding = createOnboardingManager({ dataDir: config.dataDir, logger });
+
+  // ── Delivery queue ─────────────────────────────────────────────────────
+  const deliveryQueue = new DeliveryQueue({
+    filePath: join(config.dataDir, "delivery", "queue.json"),
+    maxAttempts: config.delivery.maxAttempts,
+    baseRetryMs: config.delivery.baseRetryMs,
+    maxRetryMs: config.delivery.maxRetryMs,
+    logger,
+  });
+  await deliveryQueue.load();
+
+  const getChannelAdapter = (channelType: string): ChannelAdapter | undefined =>
+    channelAdapters.find((adapter) => adapter.channelType === channelType);
+
+  const sendWithDeliveryQueue = async (
+    channelType: string,
+    channelId: string,
+    response: { text: string },
+  ): Promise<void> => {
+    const targetChannel = getChannelAdapter(channelType);
+    if (!targetChannel) {
+      logger.warn({ channelType }, "no channel adapter available for response delivery");
+      await deliveryQueue.enqueue(channelType, channelId, response);
+      return;
+    }
+
+    try {
+      await targetChannel.sendMessage(channelId, response);
+    } catch (error: unknown) {
+      logger.error(
+        {
+          channelType,
+          channelId,
+          error: error instanceof Error ? error.message : String(error),
+        },
+        "send failed; queued for retry",
+      );
+      await deliveryQueue.enqueue(channelType, channelId, response);
+    }
+  };
+
+  const deliveryRetryInterval = setInterval(() => {
+    void deliveryQueue.processDue(async (channelType, channelId, response) => {
+      const targetChannel = getChannelAdapter(channelType);
+      if (!targetChannel) {
+        throw new Error(`no channel adapter for ${channelType}`);
+      }
+
+      await targetChannel.sendMessage(channelId, response);
+    });
+  }, 10_000);
+
+  // ── Plugins + commands ────────────────────────────────────────────────
+  const runtimePlugins: HairyPlugin[] = [];
+  if (config.memory.autoPreload) {
+    runtimePlugins.push(
+      createMemoryPreloadPlugin({
+        backend: memoryBackend,
+        topK: config.memory.preloadTopK,
+        minScore: config.memory.preloadMinScore,
+        maxChars: config.memory.preloadMaxChars,
+        logger,
+      }),
+    );
+  }
+
+  const pluginRunner = new PluginRunner(runtimePlugins);
+  const commandRouter = new CommandRouter(logger);
+
+  const clearAllCooldowns = (): void => {
+    for (const provider of providers) {
+      authProfiles.clearCooldown(provider.name);
+    }
+  };
+
+  const fallbackModelList = (): string[] =>
+    routing.modelFallbackChain
+      .map((entry) => `${entry.provider}/${entry.model}`)
+      .filter((entry) => entry !== activePrimaryModel);
+
+  const metricSnapshot = (): Record<string, number> => {
+    const output: Record<string, number> = {};
+    const all = metrics.getAll();
+
+    for (const entry of [...all.counters, ...all.gauges]) {
+      const labels = Object.entries(entry.labels)
+        .sort(([left], [right]) => left.localeCompare(right))
+        .map(([key, value]) => `${key}=${String(value)}`)
+        .join(",");
+      const metricKey = labels.length > 0 ? `${entry.name}{${labels}}` : entry.name;
+      output[metricKey] = entry.value;
+    }
+
+    return output;
+  };
+
+  const commandRuntime = {
+    getModelInfo: () => ({ primary: activePrimaryModel, fallbacks: fallbackModelList() }),
+    setPrimaryModel: (model: string) => {
+      const normalized = model.trim();
+      if (modelAliases.has(normalized)) {
+        activePrimaryModel = normalized;
+        return true;
+      }
+
+      const providerDefault = providerDefaultModels.get(normalized);
+      if (providerDefault) {
+        activePrimaryModel = `${normalized}/${providerDefault}`;
+        return true;
+      }
+
+      return false;
+    },
+    getProviderHealth: () => authProfiles.getHealthSnapshot(),
+    clearCooldowns: clearAllCooldowns,
+    getUptime: () => process.uptime(),
+    getMetrics: metricSnapshot,
+    getQueueStats: () => deliveryQueue.stats(),
+  };
+
   // ── Orchestrator ─────────────────────────────────────────────────────────
   const orchestrator = new Orchestrator({
     logger,
     metrics,
     queue,
-    handleRun: async (message, traceId) => {
+    plugins: pluginRunner,
+    handleRun: async (message, traceId, pluginCtx) => {
+      const sourceChannel = getChannelAdapter(message.channelType);
+      sourceChannel?.startTyping(message.channelId);
+
+      const senderJid = message.senderId || message.channelId;
+      const pushName = message.senderName || senderJid.split("@")[0];
+      const userProfile = await onboarding.getOrCreateProfile(senderJid, pushName);
+      const onboardingCtx = onboarding.getOnboardingPrompt(userProfile, message.content.text ?? "");
+
+      const commandText = message.content.text ?? "";
+      const commandResponse = await commandRouter.route(commandText, {
+        channelType: message.channelType,
+        channelId: message.channelId,
+        senderId: message.senderId,
+        runtime: commandRuntime,
+      });
+
+      if (commandResponse !== null) {
+        const preppedCommandResponse = await pluginRunner.runBeforeSend(
+          { text: commandResponse },
+          pluginCtx,
+        );
+
+        if (preppedCommandResponse) {
+          await sendWithDeliveryQueue(
+            message.channelType,
+            message.channelId,
+            preppedCommandResponse,
+          );
+        }
+
+        sourceChannel?.stopTyping(message.channelId);
+        return preppedCommandResponse ?? { text: "" };
+      }
+
       await conversation.append(message);
 
       const skillFragments = await skills.getPromptFragments();
@@ -683,6 +958,9 @@ const main = async (): Promise<void> => {
         toolDescriptions: toolDefs.map((t) => `- ${t.name}: ${t.description}`),
         skillFragments,
         channel: message.channelType,
+        onboardingContext: onboardingCtx ?? undefined,
+        userName: userProfile.name,
+        userPreferences: userProfile.onboarded ? userProfile.preferences : undefined,
       });
 
       const currentHash = createHash("sha256").update(systemPrompt).digest("hex");
@@ -696,11 +974,45 @@ const main = async (): Promise<void> => {
         { role: "user", content: [{ type: "text", text: message.content.text ?? "" }] },
       ];
 
+      let streamHandle: Awaited<
+        ReturnType<Exclude<ChannelAdapter["sendStreamStart"], undefined>>
+      > | null = null;
+      if (sourceChannel?.sendStreamStart) {
+        try {
+          streamHandle = await sourceChannel.sendStreamStart(message.channelId, "⏳");
+        } catch (error: unknown) {
+          logger.warn(
+            {
+              channelType: message.channelType,
+              channelId: message.channelId,
+              error: error instanceof Error ? error.message : String(error),
+            },
+            "failed to start streaming response",
+          );
+        }
+      }
+
       const startedAt = Date.now();
+      const [requestedProvider, ...modelParts] = activePrimaryModel.split("/");
+      const activeProvider = providerDefaultModels.has(requestedProvider)
+        ? requestedProvider
+        : routing.defaultProvider;
+      const fallbackModel =
+        providerDefaultModels.get(activeProvider) ??
+        defaultModelForProvider(config, activeProvider);
+      const activeModel = modelParts.join("/") || fallbackModel;
+      const activeGateway = buildGatewayForModel(activeProvider, activeModel);
+      let streamedText = "";
+
       const result = await runAgentLoop(loopMessages, {
         provider: {
           stream: (msgs, streamOpts) =>
-            gateway.stream(msgs, { ...streamOpts, route: { intent: "complex" } }),
+            activeGateway.stream(msgs, {
+              ...streamOpts,
+              model: activeModel,
+              route: { intent: "complex" },
+              timeoutMs: config.resilience.requestTimeoutMs,
+            }),
         },
         executor: async (name, args, _callId) => {
           const execution = await registry.execute(name, args, {
@@ -713,18 +1025,38 @@ const main = async (): Promise<void> => {
           return { content: execution.content, isError: execution.isError ?? false };
         },
         streamOpts: {
-          model: defaultModel,
+          model: activeModel,
           systemPrompt,
           tools: toolDefs,
           maxTokens: 4096,
+          timeoutMs: config.resilience.requestTimeoutMs,
         },
         logger,
         metrics,
+        plugins: pluginRunner,
+        pluginCtx,
         maxIterations: config.maxIterationsPerRun,
+        onTextDelta: (delta) => {
+          if (!streamHandle) {
+            return;
+          }
+          streamedText += delta;
+          void streamHandle.update(streamedText).catch((error: unknown) => {
+            logger.debug(
+              {
+                channelType: message.channelType,
+                channelId: message.channelId,
+                error: error instanceof Error ? error.message : String(error),
+              },
+              "streaming update failed",
+            );
+          });
+        },
       });
 
       const responseText = result.text || "I could not produce a response.";
-      const response = { text: responseText };
+      const prepared = await pluginRunner.runBeforeSend({ text: responseText }, pluginCtx);
+      const response = prepared ?? { text: "" };
       const durationMs = Date.now() - startedAt;
 
       const evalScore = evalHarness.score({
@@ -743,13 +1075,18 @@ const main = async (): Promise<void> => {
       });
 
       logger.info(
-        { traceId, evalScore: evalScore.score, iterations: result.iterations },
+        {
+          traceId,
+          evalScore: evalScore.score,
+          iterations: result.iterations,
+          model: `${activeProvider}/${activeModel}`,
+        },
         "run scored",
       );
 
       await conversation.append({
         role: "assistant",
-        text: responseText,
+        text: response.text,
         timestamp: new Date().toISOString(),
       });
       await episodic.logEvent({
@@ -785,6 +1122,42 @@ const main = async (): Promise<void> => {
         });
       }
 
+      if (!userProfile.onboarded) {
+        if (userProfile.onboardStep >= 1) {
+          await onboarding.completeOnboarding(senderJid);
+          logger.info({ jid: senderJid, name: userProfile.name }, "user onboarding completed");
+        } else {
+          await onboarding.advanceStep(senderJid);
+        }
+      }
+
+      if (prepared) {
+        if (streamHandle) {
+          try {
+            await streamHandle.finalize(response.text);
+          } catch (error: unknown) {
+            logger.warn(
+              {
+                channelType: message.channelType,
+                channelId: message.channelId,
+                error: error instanceof Error ? error.message : String(error),
+              },
+              "stream finalize failed; enqueueing final response",
+            );
+            await deliveryQueue.enqueue(message.channelType, message.channelId, response);
+          }
+        } else {
+          await sendWithDeliveryQueue(message.channelType, message.channelId, response);
+        }
+      } else if (streamHandle) {
+        try {
+          await streamHandle.finalize("Response suppressed.");
+        } catch {
+          // best effort
+        }
+      }
+
+      sourceChannel?.stopTyping(message.channelId);
       return response;
     },
   });
@@ -841,9 +1214,25 @@ const main = async (): Promise<void> => {
   await initiative.start();
   await health.start();
 
+  // ── Reminder check loop ──────────────────────────────────────────────────
+  setReminderCallback((reminder) => {
+    const targetChannel = channelAdapters.find((ch) => ch.isConnected());
+    if (targetChannel && reminder.channelId) {
+      void sendWithDeliveryQueue(targetChannel.channelType, reminder.channelId, {
+        text: `⏰ Reminder: ${reminder.message}`,
+      });
+      logger.info({ reminderId: reminder.id, channelId: reminder.channelId }, "reminder fired");
+    }
+  });
+  const reminderInterval = setInterval(checkReminders, 30_000);
+
   // ── Shutdown ──────────────────────────────────────────────────────────────
   const shutdown = async (): Promise<void> => {
     logger.info("shutting down hairy-agent");
+    clearInterval(reminderInterval);
+    clearInterval(deliveryRetryInterval);
+    await deliveryQueue.save();
+    await authProfiles.save();
     for (const channel of channelAdapters) {
       await channel.disconnect();
     }
@@ -861,7 +1250,7 @@ const main = async (): Promise<void> => {
   logger.info(
     {
       agentName: config.agentName,
-      model: defaultModel,
+      model: activePrimaryModel,
       tools: toolDefs.map((tool) => tool.name),
       providers: providers.map((provider) => provider.name),
       channels: channelAdapters.map((channel) => channel.channelType),

@@ -11,6 +11,7 @@
  */
 
 import type { HairyLogger, Metrics } from "@hairy/observability";
+import type { PluginContext, PluginRunner } from "./plugin.js";
 import type { ToolCallRecord } from "./types.js";
 
 /** Minimal provider interface — just what the loop needs */
@@ -43,6 +44,7 @@ export interface AgentLoopStreamOptions {
   temperature?: number;
   maxTokens?: number;
   thinkingLevel?: "off" | "low" | "medium" | "high";
+  timeoutMs?: number;
 }
 
 export interface AgentLoopEvent {
@@ -77,6 +79,8 @@ export interface AgentLoopOptions {
   streamOpts: AgentLoopStreamOptions;
   logger: HairyLogger;
   metrics?: Metrics;
+  plugins?: PluginRunner;
+  pluginCtx?: PluginContext;
   /** Max tool-use round-trips before forcing stop (default: 10) */
   maxIterations?: number;
   /** Callback for each text chunk (for streaming to user) */
@@ -100,6 +104,22 @@ export interface AgentLoopResult {
   iterations: number;
 }
 
+const asError = (error: unknown): Error =>
+  error instanceof Error ? error : new Error(String(error));
+
+const blockedResponseText = (ctx: PluginContext | null): string | null => {
+  if (!ctx) {
+    return null;
+  }
+
+  const filtered = ctx.state.get("contentSafety.filteredResponse");
+  if (typeof filtered === "string" && filtered.trim().length > 0) {
+    return filtered;
+  }
+
+  return null;
+};
+
 /**
  * Run the agent loop: LLM → tool calls → execute → repeat until done.
  */
@@ -111,81 +131,142 @@ export const runAgentLoop = async (
   const conversation = [...messages];
   const allToolCalls: ToolCallRecord[] = [];
   const totalUsage = { input: 0, output: 0, costUsd: 0 };
+  const pluginCtx = opts.plugins ? (opts.pluginCtx ?? null) : null;
+
   let finalText = "";
   let iterations = 0;
 
-  for (let i = 0; i < maxIter; i++) {
+  outer: for (let i = 0; i < maxIter; i++) {
     iterations = i + 1;
 
-    // Collect events from this turn
-    const textParts: string[] = [];
-    const pendingCalls = new Map<string, PendingToolCall>();
-    let stopReason = "end";
-    let hadError = false;
+    let retryAfterModel = false;
+    let turnText = "";
+    let pendingCalls = new Map<string, PendingToolCall>();
 
-    for await (const event of opts.provider.stream(conversation, opts.streamOpts)) {
-      switch (event.type) {
-        case "text_delta": {
-          if (event.text) {
-            textParts.push(event.text);
-            opts.onTextDelta?.(event.text);
-          }
-          break;
+    while (true) {
+      const textParts: string[] = [];
+      pendingCalls = new Map<string, PendingToolCall>();
+      let hadModelError = false;
+      let modelErrorMessage = "unknown model error";
+
+      let streamMessages = conversation;
+      let streamOpts = opts.streamOpts;
+
+      if (opts.plugins && pluginCtx) {
+        const transformed = await opts.plugins.runBeforeModel(
+          streamMessages,
+          streamOpts,
+          pluginCtx,
+        );
+        if (transformed === null) {
+          finalText = blockedResponseText(pluginCtx) ?? "Request blocked by runtime policy.";
+          break outer;
         }
-        case "tool_call_start": {
-          if (event.toolCallId && event.toolName) {
-            pendingCalls.set(event.toolCallId, {
-              id: event.toolCallId,
-              name: event.toolName,
-              argsChunks: [],
-            });
-          }
-          break;
-        }
-        case "tool_call_delta": {
-          if (event.toolCallId && event.toolArgsDelta) {
-            const pending = pendingCalls.get(event.toolCallId);
-            if (pending) {
-              pending.argsChunks.push(event.toolArgsDelta);
+
+        streamMessages = transformed.messages;
+        streamOpts = transformed.opts;
+      }
+
+      try {
+        for await (const event of opts.provider.stream(streamMessages, streamOpts)) {
+          switch (event.type) {
+            case "text_delta": {
+              if (event.text) {
+                textParts.push(event.text);
+                opts.onTextDelta?.(event.text);
+              }
+              break;
+            }
+            case "tool_call_start": {
+              if (event.toolCallId && event.toolName) {
+                pendingCalls.set(event.toolCallId, {
+                  id: event.toolCallId,
+                  name: event.toolName,
+                  argsChunks: [],
+                });
+              }
+              break;
+            }
+            case "tool_call_delta": {
+              if (event.toolCallId && event.toolArgsDelta) {
+                const pending = pendingCalls.get(event.toolCallId);
+                if (pending) {
+                  pending.argsChunks.push(event.toolArgsDelta);
+                }
+              }
+              break;
+            }
+            case "usage": {
+              if (event.usage) {
+                totalUsage.input += event.usage.input;
+                totalUsage.output += event.usage.output;
+                totalUsage.costUsd += event.usage.costUsd;
+              }
+              break;
+            }
+            case "error": {
+              hadModelError = true;
+              modelErrorMessage = event.error ?? "model stream error";
+              break;
+            }
+            case "thinking": {
+              opts.logger.debug({ thinking: event.text }, "llm thinking");
+              break;
+            }
+            case "tool_call_end":
+            case "stop": {
+              break;
             }
           }
-          break;
-        }
-        case "tool_call_end": {
-          // Nothing to do — args are already accumulated
-          break;
-        }
-        case "usage": {
-          if (event.usage) {
-            totalUsage.input += event.usage.input;
-            totalUsage.output += event.usage.output;
-            totalUsage.costUsd += event.usage.costUsd;
+
+          if (hadModelError) {
+            break;
           }
-          break;
         }
-        case "stop": {
-          stopReason = event.reason ?? "end";
-          break;
+      } catch (error: unknown) {
+        hadModelError = true;
+        modelErrorMessage = asError(error).message;
+      }
+
+      if (hadModelError) {
+        opts.logger.error({ error: modelErrorMessage }, "agent loop provider error");
+        if (opts.plugins && pluginCtx) {
+          const replacement = await opts.plugins.runOnModelError(
+            new Error(modelErrorMessage),
+            pluginCtx,
+          );
+          if (typeof replacement === "string") {
+            turnText = replacement;
+            pendingCalls.clear();
+            break;
+          }
         }
-        case "error": {
-          opts.logger.error({ error: event.error }, "agent loop provider error");
-          hadError = true;
-          break;
-        }
-        case "thinking": {
-          // Log but don't include in output
-          opts.logger.debug({ thinking: event.text }, "llm thinking");
-          break;
+
+        if (pendingCalls.size === 0 && textParts.length === 0) {
+          finalText = "An error occurred while processing your request.";
+          break outer;
         }
       }
-    }
 
-    if (hadError && pendingCalls.size === 0 && textParts.length === 0) {
-      finalText = "An error occurred while processing your request.";
+      turnText = textParts.join("");
+
+      if (opts.plugins && pluginCtx) {
+        const afterModel = await opts.plugins.runAfterModel(turnText, [], pluginCtx);
+        if (afterModel === null) {
+          if (!retryAfterModel) {
+            retryAfterModel = true;
+            continue;
+          }
+
+          finalText = blockedResponseText(pluginCtx) ?? "I couldn't produce a safe response.";
+          break outer;
+        }
+
+        turnText = afterModel;
+      }
+
       break;
     }
-
-    const turnText = textParts.join("");
 
     // No tool calls → we're done
     if (pendingCalls.size === 0) {
@@ -215,6 +296,38 @@ export const runAgentLoop = async (
         );
       }
 
+      if (opts.plugins && pluginCtx) {
+        const beforeTool = await opts.plugins.runBeforeTool(call.name, parsedArgs, pluginCtx);
+        if (beforeTool === null) {
+          const blocked = `tool call blocked by plugin: ${call.name}`;
+          allToolCalls.push({
+            toolName: call.name,
+            args: parsedArgs,
+            result: blocked,
+            isError: true,
+            durationMs: 0,
+          });
+
+          toolResultContent.push({
+            type: "tool_result",
+            toolResult: {
+              id: call.id,
+              content: blocked,
+              isError: true,
+            },
+          });
+
+          assistantContent.push({
+            type: "tool_call",
+            toolCall: { id: call.id, name: call.name, args: parsedArgs },
+          });
+
+          continue;
+        }
+
+        parsedArgs = beforeTool.args;
+      }
+
       // Add to assistant content
       assistantContent.push({
         type: "tool_call",
@@ -225,32 +338,63 @@ export const runAgentLoop = async (
       opts.onToolStart?.(call.name, call.id);
       const startedAt = Date.now();
 
-      const result = await opts.executor(call.name, parsedArgs, call.id);
+      let toolResult: { content: string; isError: boolean };
+      try {
+        toolResult = await opts.executor(call.name, parsedArgs, call.id);
+      } catch (error: unknown) {
+        const toolError = asError(error);
+        if (opts.plugins && pluginCtx) {
+          const fallback = await opts.plugins.runOnToolError(call.name, toolError, pluginCtx);
+          if (fallback) {
+            toolResult = {
+              content: fallback.result,
+              isError: fallback.isError,
+            };
+          } else {
+            toolResult = { content: toolError.message, isError: true };
+          }
+        } else {
+          toolResult = { content: toolError.message, isError: true };
+        }
+      }
+
+      if (opts.plugins && pluginCtx) {
+        const afterTool = await opts.plugins.runAfterTool(
+          call.name,
+          toolResult.content,
+          toolResult.isError,
+          pluginCtx,
+        );
+        toolResult = {
+          content: afterTool.result,
+          isError: afterTool.isError,
+        };
+      }
 
       const durationMs = Date.now() - startedAt;
-      opts.onToolEnd?.(call.name, call.id, result.content, result.isError);
+      opts.onToolEnd?.(call.name, call.id, toolResult.content, toolResult.isError);
 
       opts.logger.info(
         {
           toolName: call.name,
           callId: call.id,
-          isError: result.isError,
+          isError: toolResult.isError,
           durationMs,
-          resultLength: result.content.length,
+          resultLength: toolResult.content.length,
         },
         "tool executed",
       );
 
       opts.metrics?.increment("tool_calls", 1, {
         tool: call.name,
-        status: result.isError ? "error" : "ok",
+        status: toolResult.isError ? "error" : "ok",
       });
 
       allToolCalls.push({
         toolName: call.name,
         args: parsedArgs,
-        result: result.content,
-        isError: result.isError,
+        result: toolResult.content,
+        isError: toolResult.isError,
         durationMs,
       });
 
@@ -258,8 +402,8 @@ export const runAgentLoop = async (
         type: "tool_result",
         toolResult: {
           id: call.id,
-          content: result.content,
-          isError: result.isError,
+          content: toolResult.content,
+          isError: toolResult.isError,
         },
       });
     }

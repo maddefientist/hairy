@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { AgentResponse, HairyMessage } from "@hairy/core";
-import type { ChannelAdapter } from "./types.js";
+import type { ChannelAdapter, StreamHandle } from "./types.js";
 
 export abstract class BaseAdapter implements ChannelAdapter {
   private handler: ((msg: HairyMessage) => void) | null = null;
@@ -13,6 +13,8 @@ export abstract class BaseAdapter implements ChannelAdapter {
   abstract disconnect(): Promise<void>;
 
   abstract sendMessage(channelId: string, response: AgentResponse): Promise<void>;
+
+  sendStreamStart?(_channelId: string, _initialText: string): Promise<StreamHandle>;
 
   onMessage(handler: (msg: HairyMessage) => void): void {
     this.handler = handler;

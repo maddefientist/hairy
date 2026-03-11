@@ -1,7 +1,15 @@
+import { timingSafeEqual } from "node:crypto";
 import type { AgentResponse } from "@hairy/core";
 import { serve } from "@hono/node-server";
 import { Hono } from "hono";
 import { BaseAdapter } from "./adapter.js";
+
+const safeCompare = (a: string, b: string): boolean => {
+  const bufA = Buffer.from(a);
+  const bufB = Buffer.from(b);
+  if (bufA.length !== bufB.length) return false;
+  return timingSafeEqual(bufA, bufB);
+};
 
 export interface WebhookOpts {
   port: number;
@@ -29,7 +37,7 @@ export class WebhookAdapter extends BaseAdapter {
 
     app.post("/webhook/incoming", async (c) => {
       const secret = c.req.header("x-hairy-secret");
-      if (secret !== this.opts.secret) {
+      if (!secret || !safeCompare(secret, this.opts.secret)) {
         return c.json({ error: "unauthorized" }, 401);
       }
 
@@ -47,7 +55,7 @@ export class WebhookAdapter extends BaseAdapter {
 
     app.post("/webhook/outgoing", async (c) => {
       const secret = c.req.header("x-hairy-secret");
-      if (secret !== this.opts.secret) {
+      if (!secret || !safeCompare(secret, this.opts.secret)) {
         return c.json({ error: "unauthorized" }, 401);
       }
       return c.json({ ok: true });

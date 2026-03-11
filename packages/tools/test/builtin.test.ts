@@ -30,8 +30,11 @@ const ctx = () => ({
 });
 
 beforeEach(async () => {
-  tmpDir = join(tmpdir(), `hairy-tools-${randomUUID()}`);
-  await mkdir(tmpDir, { recursive: true });
+  const raw = join(tmpdir(), `hairy-tools-${randomUUID()}`);
+  await mkdir(raw, { recursive: true });
+  // Resolve symlinks (macOS: /tmp → /private/tmp) so path checks work.
+  const { realpath } = await import("node:fs/promises");
+  tmpDir = await realpath(raw);
 });
 
 afterEach(() => {
@@ -49,14 +52,22 @@ describe("bash tool", () => {
     expect(result.content).toContain("hello");
   });
 
-  it("returns stderr in output", async () => {
-    const result = await bash.execute({ command: "echo warning >&2" }, ctx());
+  it("returns stderr in output (shell operators allowed)", async () => {
+    const shellBash = createBashTool({ allowShellOperators: true });
+    const result = await shellBash.execute({ command: "echo warning >&2" }, ctx());
     expect(result.isError).toBeFalsy();
     expect(result.content).toContain("warning");
   });
 
-  it("returns isError true on non-zero exit", async () => {
-    const result = await bash.execute({ command: "exit 1" }, ctx());
+  it("rejects shell operators by default", async () => {
+    const result = await bash.execute({ command: "echo hello; echo world" }, ctx());
+    expect(result.isError).toBe(true);
+    expect(result.content).toContain("shell operators");
+  });
+
+  it("returns isError true on non-zero exit (shell operators allowed)", async () => {
+    const shellBash = createBashTool({ allowShellOperators: true });
+    const result = await shellBash.execute({ command: "exit 1" }, ctx());
     expect(result.isError).toBe(true);
   });
 

