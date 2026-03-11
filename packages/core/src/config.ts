@@ -201,6 +201,8 @@ const mergeObjects = (
 
 export const loadConfig = async (configDir = "config"): Promise<HairyConfig> => {
   const defaults = await parseTomlFile(join(configDir, "default.toml"));
+  const production = await parseTomlFile(join(configDir, "production.toml"));
+  const local = await parseTomlFile(join(configDir, "local.toml"));
 
   const envOverride: Record<string, unknown> = {
     health: {
@@ -208,6 +210,9 @@ export const loadConfig = async (configDir = "config"): Promise<HairyConfig> => 
     },
   };
 
-  const merged = mergeObjects(defaults, envOverride);
+  // Layer: default → production → local → env
+  let merged = mergeObjects(defaults, production);
+  merged = mergeObjects(merged, local);
+  merged = mergeObjects(merged, envOverride);
   return configSchema.parse(merged);
 };

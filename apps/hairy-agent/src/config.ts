@@ -225,7 +225,7 @@ export const loadHairyConfig = async (): Promise<HairyRuntimeConfig> => {
     routing: {
       defaultProvider: base.routing.default_provider,
       fallbackChain: base.routing.fallback_chain,
-      modelFallbackChain: base.providers.ollama?.model_fallback_chain ?? [],
+      modelFallbackChain: toList(process.env.MODEL_FALLBACK_CHAIN) ?? base.providers.ollama?.model_fallback_chain ?? [],
     },
     channels: {
       cli: {
