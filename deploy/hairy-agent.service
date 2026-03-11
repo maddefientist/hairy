@@ -10,7 +10,7 @@ EnvironmentFile=/home/aghari/hairy/.env
 ExecStart=/usr/bin/node apps/hairy-agent/dist/main.js
 Restart=on-failure
 RestartSec=10
-WatchdogSec=120
+# WatchdogSec removed — app doesn't send sd_notify keepalives
 
 # Resource limits
 MemoryMax=2G
