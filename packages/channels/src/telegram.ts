@@ -417,7 +417,14 @@ export class TelegramAdapter extends BaseAdapter {
       return;
     }
 
-    if (this.opts.allowedChatIds.length > 0 && !this.opts.allowedChatIds.includes(chatId)) {
+    // Allow DMs (positive chat IDs) unless allowlist explicitly contains only group IDs
+    const isDm = !chatId.startsWith("-");
+    const isAllowed =
+      this.opts.allowedChatIds.length === 0 ||
+      this.opts.allowedChatIds.includes(chatId) ||
+      (isDm && this.opts.allowedChatIds.every((id) => id.startsWith("-")));
+
+    if (!isAllowed) {
       this.opts.logger.warn({ chatId }, "telegram message from unlisted chat, ignoring");
       return;
     }
