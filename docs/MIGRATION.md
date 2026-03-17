@@ -4,7 +4,44 @@ HairyClaw is a framework — your agent's identity lives in config, not in the f
 When migrating an existing agent (e.g., Hari from OpenClaw, or Betki from a custom setup),
 you must bring the agent's identity, memory, and config into the HairyClaw structure.
 
-## Quick Checklist
+## Automated Migration (OpenClaw)
+
+If you're migrating from OpenClaw, use the migration script:
+
+```bash
+# Dry run first — see what it would do
+./scripts/migrate-openclaw.sh --agent-name Hari --channel telegram --dry-run
+
+# Run for real
+./scripts/migrate-openclaw.sh --agent-name Hari --channel telegram --provider anthropic
+
+# With custom paths
+./scripts/migrate-openclaw.sh \
+  --agent-name Betki \
+  --openclaw-dir /root/.openclaw \
+  --hairyclaw-dir /root/hairyclaw \
+  --channel whatsapp \
+  --provider ollama \
+  --model kimi-k2.5:cloud \
+  --hive-namespace betki
+```
+
+The script handles:
+- Timestamped backup of all OpenClaw data
+- Identity extraction (IDENTITY.md + SOUL.md + USER.md + system.md → identity.md)
+- Knowledge migration (MEMORY.md + daily logs → knowledge.md)
+- Skill migration with review index
+- Workspace document preservation
+- Config generation (local.toml + .env template)
+- Migration report
+
+After running, review the generated files, fill in `.env`, build, and start.
+
+## Manual Migration
+
+If you're migrating from a different framework or want more control:
+
+### Quick Checklist
 
 - [ ] Create `config/local.toml` with agent name and channel settings
 - [ ] Create `data/memory/identity.md` with agent personality and history
