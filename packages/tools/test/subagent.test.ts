@@ -1,4 +1,4 @@
-import type { AgentLoopOptions, AgentLoopResult } from "@hairy/core";
+import type { AgentLoopOptions, AgentLoopResult } from "@hairyclaw/core";
 import { describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import { createSubAgentTool } from "../src/builtin/subagent.js";

@@ -1,27 +1,42 @@
 #!/usr/bin/env bash
-# Install Hairy on aghari VM
+# Install HairyClaw agent framework
 set -euo pipefail
 
-HAIRY_DIR="/home/aghari/hairy"
-REPO_URL="${HAIRY_REPO_URL:-<repo-url>}"
+INSTALL_DIR="${HAIRYCLAW_DIR:-$HOME/hairyclaw}"
+REPO_URL="${HAIRYCLAW_REPO_URL:-https://github.com/maddefientist/hairyclaw.git}"
+SERVICE_NAME="${HAIRYCLAW_SERVICE:-hairyclaw}"
 
-if [ -d "$HAIRY_DIR" ]; then
-  cd "$HAIRY_DIR"
+echo "=== HairyClaw Agent Framework Installer ==="
+echo "Install dir: $INSTALL_DIR"
+echo "Service name: $SERVICE_NAME"
+
+if [ -d "$INSTALL_DIR" ]; then
+  cd "$INSTALL_DIR"
   git pull --ff-only
 else
-  git clone "$REPO_URL" "$HAIRY_DIR"
-  cd "$HAIRY_DIR"
+  git clone "$REPO_URL" "$INSTALL_DIR"
+  cd "$INSTALL_DIR"
 fi
 
-npm install -g pnpm
+# Install deps and build
+command -v pnpm >/dev/null || npm install -g pnpm
 pnpm install
 pnpm build
 
-[ -f .env ] || cp deploy/hairy-agent.env.example .env
+# Create .env from example if missing
+[ -f .env ] || cp deploy/hairyclaw.env.example .env
 
+# Install systemd service
 mkdir -p ~/.config/systemd/user
-cp deploy/hairy-agent.service ~/.config/systemd/user/
+cp deploy/hairyclaw.service ~/.config/systemd/user/${SERVICE_NAME}.service
 systemctl --user daemon-reload
-systemctl --user enable hairy-agent
+systemctl --user enable "$SERVICE_NAME"
 
-echo "Install complete. Run: systemctl --user start hairy-agent"
+echo ""
+echo "=== Install complete ==="
+echo "1. Edit .env with your API keys and agent config"
+echo "2. Create config/local.toml with agent name and channel settings"
+echo "3. Create data/memory/identity.md with agent personality"
+echo "4. Run: systemctl --user start $SERVICE_NAME"
+echo ""
+echo "See docs/MIGRATION.md for migrating from OpenClaw or other frameworks."

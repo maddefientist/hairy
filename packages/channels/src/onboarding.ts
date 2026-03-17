@@ -1,6 +1,6 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import type { HairyLogger as Logger } from "@hairy/observability";
+import type { HairyClawLogger as Logger } from "@hairyclaw/observability";
 
 export interface UserProfile {
   jid: string;
@@ -22,14 +22,14 @@ export interface OnboardingManager {
     jid: string,
     updates: Partial<Pick<UserProfile, "name" | "preferences">>,
   ): Promise<UserProfile>;
-  getOnboardingPrompt(profile: UserProfile, userMessage: string): string | null;
+  getOnboardingPrompt(profile: UserProfile, userMessage: string, channel?: string): string | null;
 }
 
-const ONBOARD_STEPS = [
+const buildOnboardSteps = (agentName: string, channel: string) => [
   // Step 0: first contact — intro
   {
     prompt: (name: string) =>
-      `This is a brand-new user named "${name}" messaging for the first time. Give them a warm, casual introduction. Tell them:\n- Your name is Betki\n- You're their personal assistant on WhatsApp\n- You can help with anything: web searches, research, planning, writing, problem-solving, automations, recommendations, and more\n- You have real-time web search (SearXNG), file tools, memory that persists across conversations, and the ability to learn their preferences\n- Ask what they'd like to be called and what kind of things they'd most want help with\nKeep it short and natural — this is WhatsApp, not an email. No bullet-point walls. 2-3 short paragraphs max.`,
+      `This is a brand-new user named "${name}" messaging for the first time. Give them a warm, casual introduction. Tell them:\n- Your name is ${agentName}\n- You're their personal assistant on ${channel}\n- You can help with anything: web searches, research, planning, writing, problem-solving, automations, recommendations, and more\n- You have real-time web search (SearXNG), file tools, memory that persists across conversations, and the ability to learn their preferences\n- Ask what they'd like to be called and what kind of things they'd most want help with\nKeep it short and natural — this is ${channel}, not an email. No bullet-point walls. 2-3 short paragraphs max.`,
   },
   // Step 1: learn preferences from their response
   {
@@ -41,6 +41,7 @@ const ONBOARD_STEPS = [
 export const createOnboardingManager = (opts: {
   dataDir: string;
   logger: Logger;
+  agentName?: string;
 }): OnboardingManager => {
   const profilesDir = join(opts.dataDir, "users");
 
@@ -92,7 +93,8 @@ export const createOnboardingManager = (opts: {
     async advanceStep(jid) {
       const profile = await loadProfile(jid);
       if (!profile) throw new Error(`No profile for ${jid}`);
-      profile.onboardStep = Math.min(profile.onboardStep + 1, ONBOARD_STEPS.length - 1);
+      // 2 onboarding steps: intro (0) + learn preferences (1)
+      profile.onboardStep = Math.min(profile.onboardStep + 1, 1);
       profile.updatedAt = new Date().toISOString();
       await saveProfile(profile);
       return profile;
@@ -119,9 +121,10 @@ export const createOnboardingManager = (opts: {
       return profile;
     },
 
-    getOnboardingPrompt(profile, userMessage) {
+    getOnboardingPrompt(profile, userMessage, channel) {
       if (profile.onboarded) return null;
-      const step = ONBOARD_STEPS[profile.onboardStep];
+      const steps = buildOnboardSteps(opts.agentName ?? "HairyClaw", channel ?? "chat");
+      const step = steps[profile.onboardStep];
       if (!step) return null;
       return step.prompt(profile.name, userMessage);
     },

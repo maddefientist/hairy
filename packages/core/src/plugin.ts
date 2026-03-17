@@ -1,9 +1,9 @@
-import type { HairyLogger } from "@hairy/observability";
+import type { HairyClawLogger } from "@hairyclaw/observability";
 import type {
   AgentLoopMessage as ProviderMessage,
   AgentLoopStreamOptions as StreamOptions,
 } from "./agent-loop.js";
-import type { AgentResponse, HairyMessage, RunResult, ToolCallRecord } from "./types.js";
+import type { AgentResponse, HairyClawMessage, RunResult, ToolCallRecord } from "./types.js";
 
 export interface PluginContext {
   traceId: string;
@@ -11,14 +11,14 @@ export interface PluginContext {
   channelId: string;
   senderId: string;
   state: Map<string, unknown>;
-  logger: HairyLogger;
+  logger: HairyClawLogger;
 }
 
-export interface HairyPlugin {
+export interface HairyClawPlugin {
   name: string;
   priority?: number;
 
-  onUserMessage?(msg: HairyMessage, ctx: PluginContext): Promise<HairyMessage | null>;
+  onUserMessage?(msg: HairyClawMessage, ctx: PluginContext): Promise<HairyClawMessage | null>;
   beforeModel?(
     messages: ProviderMessage[],
     opts: StreamOptions,
@@ -51,17 +51,17 @@ export interface HairyPlugin {
   onRunEnd?(ctx: PluginContext, result?: RunResult, error?: Error): Promise<void>;
 }
 
-const pluginPriority = (plugin: HairyPlugin): number => plugin.priority ?? 100;
+const pluginPriority = (plugin: HairyClawPlugin): number => plugin.priority ?? 100;
 
 export class PluginRunner {
-  private readonly plugins: HairyPlugin[];
+  private readonly plugins: HairyClawPlugin[];
 
-  constructor(plugins: HairyPlugin[]) {
+  constructor(plugins: HairyClawPlugin[]) {
     this.plugins = [...plugins].sort((left, right) => pluginPriority(left) - pluginPriority(right));
   }
 
-  async runOnUserMessage(msg: HairyMessage, ctx: PluginContext): Promise<HairyMessage | null> {
-    let current: HairyMessage | null = msg;
+  async runOnUserMessage(msg: HairyClawMessage, ctx: PluginContext): Promise<HairyClawMessage | null> {
+    let current: HairyClawMessage | null = msg;
 
     for (const plugin of this.plugins) {
       if (!plugin.onUserMessage || current === null) {
@@ -69,8 +69,8 @@ export class PluginRunner {
       }
 
       const hook = plugin.onUserMessage;
-      const currentMessage: HairyMessage = current;
-      const next: HairyMessage | null | undefined = await this.safeHook<HairyMessage | null>(
+      const currentMessage: HairyClawMessage = current;
+      const next: HairyClawMessage | null | undefined = await this.safeHook<HairyClawMessage | null>(
         plugin,
         "onUserMessage",
         () => hook(currentMessage, ctx),
@@ -306,7 +306,7 @@ export class PluginRunner {
   }
 
   private async safeHook<T>(
-    plugin: HairyPlugin,
+    plugin: HairyClawPlugin,
     hookName: string,
     call: () => Promise<T | undefined>,
     ctx: PluginContext,

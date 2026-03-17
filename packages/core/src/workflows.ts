@@ -1,4 +1,4 @@
-import type { HairyLogger } from "@hairy/observability";
+import type { HairyClawLogger } from "@hairyclaw/observability";
 import {
   type AgentLoopProvider,
   type AgentLoopToolDef,
@@ -213,7 +213,7 @@ export class AgentStep implements WorkflowStep {
   }
 }
 
-const defaultLogger: HairyLogger = {
+const defaultLogger: HairyClawLogger = {
   info: () => {},
   error: () => {},
   warn: () => {},

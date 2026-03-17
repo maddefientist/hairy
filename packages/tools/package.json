@@ -1,5 +1,5 @@
 {
-  "name": "@hairy/tools",
+  "name": "@hairyclaw/tools",
   "version": "0.1.0",
   "type": "module",
   "main": "./dist/index.js",
@@ -17,9 +17,9 @@
     "test": "vitest --run --passWithNoTests"
   },
   "dependencies": {
-    "@hairy/core": "workspace:*",
-    "@hairy/memory": "workspace:*",
-    "@hairy/observability": "workspace:*",
+    "@hairyclaw/core": "workspace:*",
+    "@hairyclaw/memory": "workspace:*",
+    "@hairyclaw/observability": "workspace:*",
     "zod": "^3.24.2"
   }
 }

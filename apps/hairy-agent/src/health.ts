@@ -1,4 +1,4 @@
-import type { Metrics } from "@hairy/observability";
+import type { Metrics } from "@hairyclaw/observability";
 import { serve } from "@hono/node-server";
 import { Hono } from "hono";
 

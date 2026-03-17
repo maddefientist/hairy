@@ -1,0 +1,16 @@
+# HairyClaw config for Hari (Telegram agent on agent VM)
+# Copy to config/local.toml on the deployment VM
+
+[agent]
+name = "Hari"
+
+[channels.telegram]
+enabled = true
+mode = "bot"
+
+[channels.cli]
+enabled = false
+
+[providers.anthropic]
+enabled = true
+default_model = "claude-sonnet-4-20250514"

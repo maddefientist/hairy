@@ -99,10 +99,10 @@ function parseTime(input: string): Date | null {
   return null;
 }
 
-export const createReminderTool = (): Tool => ({
+export const createReminderTool = (opts?: { agentName?: string }): Tool => ({
   name: "reminder",
   description:
-    "Set, list, or cancel reminders. Supports relative times ('30m', '2h', '1d'), absolute times, and natural language ('tomorrow at 2pm'). Betki will send the reminder message when it's due.",
+    `Set, list, or cancel reminders. Supports relative times ('30m', '2h', '1d'), absolute times, and natural language ('tomorrow at 2pm'). ${opts?.agentName ?? "The agent"} will send the reminder message when it's due.`,
   parameters: reminderInputSchema,
   async execute(args, context) {
     const input = reminderInputSchema.parse(args);

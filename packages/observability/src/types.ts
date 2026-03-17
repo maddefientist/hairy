@@ -1,5 +1,5 @@
 /** Logger interface — re-exported so consumers don't need pino as a direct dep */
-export interface HairyLogger {
+export interface HairyClawLogger {
   info(obj: Record<string, unknown>, msg?: string): void;
   info(msg: string): void;
   error(obj: Record<string, unknown>, msg?: string): void;
@@ -8,7 +8,7 @@ export interface HairyLogger {
   warn(msg: string): void;
   debug(obj: Record<string, unknown>, msg?: string): void;
   debug(msg: string): void;
-  child(bindings: Record<string, unknown>): HairyLogger;
+  child(bindings: Record<string, unknown>): HairyClawLogger;
 }
 
 export interface LoggerOptions {

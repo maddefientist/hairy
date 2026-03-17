@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { RunResult } from "@hairy/core";
+import type { RunResult } from "@hairyclaw/core";
 import type { EvalScore } from "./types.js";
 
 export class EvalHarness {

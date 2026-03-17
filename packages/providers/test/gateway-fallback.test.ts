@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { Metrics } from "@hairy/observability";
+import { Metrics } from "@hairyclaw/observability";
 import { describe, expect, it, vi } from "vitest";
 import { AuthProfileManager } from "../src/auth-profiles.js";
 import { ProviderGateway, classifyError } from "../src/gateway.js";

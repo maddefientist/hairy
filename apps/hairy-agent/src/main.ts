@@ -9,26 +9,26 @@ import {
   createTelegramAdapter,
   createWebhookAdapter,
   createWhatsAppAdapter,
-} from "@hairy/channels";
+} from "@hairyclaw/channels";
 import {
   type AgentLoopMessage,
   type AgentLoopToolDef,
   CommandRouter,
-  type HairyPlugin,
+  type HairyClawPlugin,
   Orchestrator,
   PluginRunner,
   type ScheduledTask,
   Scheduler,
   TaskQueue,
   runAgentLoop,
-} from "@hairy/core";
+} from "@hairyclaw/core";
 import {
   EvalHarness,
   InitiativeEngine,
   type InitiativeRule,
   PromptVersionManager,
   SkillRegistry,
-} from "@hairy/growth";
+} from "@hairyclaw/growth";
 import {
   type ConversationEntry,
   ConversationMemory,
@@ -38,8 +38,8 @@ import {
   SemanticMemory,
   createMemoryBackend,
   createMemoryPreloadPlugin,
-} from "@hairy/memory";
-import { type HairyLogger, Metrics, createLogger } from "@hairy/observability";
+} from "@hairyclaw/memory";
+import { type HairyClawLogger, Metrics, createLogger } from "@hairyclaw/observability";
 import {
   AuthProfileManager,
   type Provider,
@@ -48,7 +48,7 @@ import {
   createGeminiProvider,
   createOllamaProvider,
   createOpenRouterProvider,
-} from "@hairy/providers";
+} from "@hairyclaw/providers";
 import {
   SidecarManager,
   type Tool,
@@ -67,17 +67,17 @@ import {
   createWebSearchTool,
   createWriteTool,
   setReminderCallback,
-} from "@hairy/tools";
+} from "@hairyclaw/tools";
 import { z } from "zod";
-import { loadHairyConfig } from "./config.js";
+import { loadHairyClawConfig } from "./config.js";
 import { HealthServer } from "./health.js";
 import { buildSystemPrompt } from "./identity.js";
 
-const logger = createLogger("hairy-agent");
+const logger = createLogger("hairyclaw");
 
 type ProviderName = "anthropic" | "openrouter" | "gemini" | "ollama";
 
-const buildProviders = (config: Awaited<ReturnType<typeof loadHairyConfig>>): Provider[] => {
+const buildProviders = (config: Awaited<ReturnType<typeof loadHairyClawConfig>>): Provider[] => {
   const providers: Provider[] = [];
 
   if (config.providers.anthropic.enabled && config.providers.anthropic.apiKey) {
@@ -100,7 +100,7 @@ const buildProviders = (config: Awaited<ReturnType<typeof loadHairyConfig>>): Pr
 };
 
 const defaultModelForProvider = (
-  config: Awaited<ReturnType<typeof loadHairyConfig>>,
+  config: Awaited<ReturnType<typeof loadHairyClawConfig>>,
   provider: string,
 ): string => {
   const name = provider as ProviderName;
@@ -111,7 +111,7 @@ const defaultModelForProvider = (
 };
 
 const resolveRouting = (
-  config: Awaited<ReturnType<typeof loadHairyConfig>>,
+  config: Awaited<ReturnType<typeof loadHairyClawConfig>>,
   providerNames: string[],
 ): {
   defaultProvider: string;
@@ -241,7 +241,8 @@ interface MaintenanceDeps {
   conversation: ConversationMemory;
   semantic: SemanticMemory;
   dataDir: string;
-  logger: HairyLogger;
+  logger: HairyClawLogger;
+  agentName: string;
   hiveUrl?: string;
   hiveApiKey?: string;
   hiveNamespace?: string;
@@ -305,7 +306,7 @@ const keywordSummary = (text: string, topN: number): string[] => {
     "will",
     "could",
     "should",
-    "betki",
+    "hairyclaw",
     "assistant",
   ]);
 
@@ -480,7 +481,7 @@ const runMaintenanceCommand = async (command: string, deps: MaintenanceDeps): Pr
       },
       body: JSON.stringify({
         namespace: deps.hiveNamespace,
-        session_id: "betki-maintenance",
+        session_id: `${deps.agentName.toLowerCase().replace(/\s+/g, "-")}-maintenance`,
         max_events: 500,
       }),
     });
@@ -508,7 +509,7 @@ const runMaintenanceCommand = async (command: string, deps: MaintenanceDeps): Pr
 };
 
 const main = async (): Promise<void> => {
-  const config = await loadHairyConfig();
+  const config = await loadHairyClawConfig();
   const metrics = new Metrics();
 
   if (config.providers.anthropic.enabled && !config.providers.anthropic.apiKey) {
@@ -573,6 +574,7 @@ const main = async (): Promise<void> => {
         semantic,
         dataDir: config.dataDir,
         logger,
+        agentName: config.agentName,
         hiveUrl: process.env.HARI_HIVE_URL,
         hiveApiKey: process.env.HARI_HIVE_WRITE_API_KEY ?? process.env.HARI_HIVE_API_KEY,
         hiveNamespace: process.env.HARI_HIVE_WRITE_NAMESPACE ?? process.env.HARI_HIVE_NAMESPACE,
@@ -601,7 +603,7 @@ const main = async (): Promise<void> => {
   registry.register(createWebSearchTool());
   registry.register(createWebFetchTool());
   registry.register(createBrowserTool());
-  registry.register(createReminderTool());
+  registry.register(createReminderTool({ agentName: config.agentName }));
   registry.register(createPdfExtractTool());
   registry.register(createMemoryRecallTool(memoryBackend));
   registry.register(createMemoryIngestTool(memoryBackend));
@@ -787,7 +789,7 @@ const main = async (): Promise<void> => {
   }
 
   // ── Onboarding ────────────────────────────────────────────────────────
-  const onboarding = createOnboardingManager({ dataDir: config.dataDir, logger });
+  const onboarding = createOnboardingManager({ dataDir: config.dataDir, logger, agentName: config.agentName });
 
   // ── Delivery queue ─────────────────────────────────────────────────────
   const deliveryQueue = new DeliveryQueue({
@@ -841,7 +843,7 @@ const main = async (): Promise<void> => {
   }, 10_000);
 
   // ── Plugins + commands ────────────────────────────────────────────────
-  const runtimePlugins: HairyPlugin[] = [];
+  const runtimePlugins: HairyClawPlugin[] = [];
   if (config.memory.autoPreload) {
     runtimePlugins.push(
       createMemoryPreloadPlugin({
@@ -921,7 +923,7 @@ const main = async (): Promise<void> => {
       const senderJid = message.senderId || message.channelId;
       const pushName = message.senderName || senderJid.split("@")[0];
       const userProfile = await onboarding.getOrCreateProfile(senderJid, pushName);
-      const onboardingCtx = onboarding.getOnboardingPrompt(userProfile, message.content.text ?? "");
+      const onboardingCtx = onboarding.getOnboardingPrompt(userProfile, message.content.text ?? "", message.channelType);
 
       const commandText = message.content.text ?? "";
       const commandResponse = await commandRouter.route(commandText, {
@@ -1228,7 +1230,7 @@ const main = async (): Promise<void> => {
 
   // ── Shutdown ──────────────────────────────────────────────────────────────
   const shutdown = async (): Promise<void> => {
-    logger.info("shutting down hairy-agent");
+    logger.info("shutting down hairyclaw agent");
     clearInterval(reminderInterval);
     clearInterval(deliveryRetryInterval);
     await deliveryQueue.save();
@@ -1256,7 +1258,7 @@ const main = async (): Promise<void> => {
       channels: channelAdapters.map((channel) => channel.channelType),
       initiativeRules: initiativeRules.length,
     },
-    "hairy-agent started",
+    "hairyclaw agent started",
   );
 };
 

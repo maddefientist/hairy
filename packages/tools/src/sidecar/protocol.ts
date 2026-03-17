@@ -1,6 +1,6 @@
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { createInterface } from "node:readline";
-import type { HairyLogger as Logger } from "@hairy/observability";
+import type { HairyClawLogger as Logger } from "@hairyclaw/observability";
 import type { JsonRpcRequest, JsonRpcResponse } from "./types.js";
 
 interface PendingRequest {

@@ -12,7 +12,7 @@ import {
 import { Orchestrator } from "../src/orchestrator.js";
 import { PluginRunner } from "../src/plugin.js";
 import { TaskQueue } from "../src/task-queue.js";
-import type { AgentResponse, HairyMessage } from "../src/types.js";
+import type { AgentResponse, HairyClawMessage } from "../src/types.js";
 
 const logger = {
   info: vi.fn(),
@@ -28,7 +28,7 @@ const metrics = {
   getAll: vi.fn(() => ({})),
 };
 
-const message = (text: string): HairyMessage => ({
+const message = (text: string): HairyClawMessage => ({
   id: randomUUID(),
   channelId: "chat-1",
   channelType: "cli",

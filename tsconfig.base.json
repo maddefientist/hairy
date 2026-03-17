@@ -16,13 +16,13 @@
     "types": ["node"],
     "baseUrl": ".",
     "paths": {
-      "@hairy/observability": ["packages/observability/src/index.ts"],
-      "@hairy/core": ["packages/core/src/index.ts"],
-      "@hairy/providers": ["packages/providers/src/index.ts"],
-      "@hairy/channels": ["packages/channels/src/index.ts"],
-      "@hairy/tools": ["packages/tools/src/index.ts"],
-      "@hairy/memory": ["packages/memory/src/index.ts"],
-      "@hairy/growth": ["packages/growth/src/index.ts"]
+      "@hairyclaw/observability": ["packages/observability/src/index.ts"],
+      "@hairyclaw/core": ["packages/core/src/index.ts"],
+      "@hairyclaw/providers": ["packages/providers/src/index.ts"],
+      "@hairyclaw/channels": ["packages/channels/src/index.ts"],
+      "@hairyclaw/tools": ["packages/tools/src/index.ts"],
+      "@hairyclaw/memory": ["packages/memory/src/index.ts"],
+      "@hairyclaw/growth": ["packages/growth/src/index.ts"]
     }
   }
 }

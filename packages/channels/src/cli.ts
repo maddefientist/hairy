@@ -1,5 +1,5 @@
 import { type Interface, createInterface } from "node:readline";
-import type { AgentResponse } from "@hairy/core";
+import type { AgentResponse } from "@hairyclaw/core";
 import { BaseAdapter } from "./adapter.js";
 
 export class CliAdapter extends BaseAdapter {

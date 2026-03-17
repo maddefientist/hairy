@@ -1,4 +1,4 @@
-import type { HairyLogger } from "@hairy/observability";
+import type { HairyClawLogger } from "@hairyclaw/observability";
 
 export interface ProfileHealth {
   lastUsed?: number;
@@ -35,7 +35,7 @@ export interface CommandRuntime {
   getQueueStats(): { pending: number; deadLetters: number };
 }
 
-const noopLogger: HairyLogger = {
+const noopLogger: HairyClawLogger = {
   info: () => {},
   error: () => {},
   warn: () => {},
@@ -77,7 +77,7 @@ export class CommandRouter {
   private readonly commands = new Map<string, CommandDef>();
   private readonly aliases = new Map<string, string>();
 
-  constructor(private readonly logger: HairyLogger = noopLogger) {
+  constructor(private readonly logger: HairyClawLogger = noopLogger) {
     this.registerBuiltins();
   }
 

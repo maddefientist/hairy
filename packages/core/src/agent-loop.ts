@@ -10,7 +10,7 @@
  * Max iterations prevent infinite loops.
  */
 
-import type { HairyLogger, Metrics } from "@hairy/observability";
+import type { HairyClawLogger, Metrics } from "@hairyclaw/observability";
 import type { PluginContext, PluginRunner } from "./plugin.js";
 import type { ToolCallRecord } from "./types.js";
 
@@ -77,7 +77,7 @@ export interface AgentLoopOptions {
   provider: AgentLoopProvider;
   executor: ToolExecutor;
   streamOpts: AgentLoopStreamOptions;
-  logger: HairyLogger;
+  logger: HairyClawLogger;
   metrics?: Metrics;
   plugins?: PluginRunner;
   pluginCtx?: PluginContext;

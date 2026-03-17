@@ -1,6 +1,6 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
-import type { HairyLogger } from "@hairy/observability";
+import type { HairyClawLogger } from "@hairyclaw/observability";
 
 export interface AuthProfile {
   id: string;
@@ -26,7 +26,7 @@ export interface AuthProfileManagerOptions {
   baseCooldownMs?: number;
   maxCooldownMs?: number;
   cooldownThreshold?: number;
-  logger?: HairyLogger;
+  logger?: HairyClawLogger;
 }
 
 interface PersistedState {
@@ -56,7 +56,7 @@ const cloneHealth = (health: ProfileHealth): ProfileHealth => ({
   failureCounts: { ...health.failureCounts },
 });
 
-const noopLogger: HairyLogger = {
+const noopLogger: HairyClawLogger = {
   info: () => {},
   error: () => {},
   warn: () => {},
@@ -70,7 +70,7 @@ export class AuthProfileManager {
   private readonly baseCooldownMs: number;
   private readonly maxCooldownMs: number;
   private readonly cooldownThreshold: number;
-  private readonly logger: HairyLogger;
+  private readonly logger: HairyClawLogger;
 
   constructor(private readonly opts: AuthProfileManagerOptions) {
     this.baseCooldownMs = opts.baseCooldownMs ?? DEFAULT_BASE_COOLDOWN_MS;

@@ -1,14 +1,14 @@
 import { randomUUID } from "node:crypto";
-import type { ChannelAdapter } from "@hairy/channels";
-import type { HairyMessage, ScheduledTask, Scheduler } from "@hairy/core";
-import type { HairyLogger } from "@hairy/observability";
+import type { ChannelAdapter } from "@hairyclaw/channels";
+import type { HairyClawMessage, ScheduledTask, Scheduler } from "@hairyclaw/core";
+import type { HairyClawLogger } from "@hairyclaw/observability";
 import type { InitiativeRule } from "./types.js";
 
 interface InitiativeEngineOptions {
   rules: InitiativeRule[];
   scheduler: Scheduler;
   channels: ChannelAdapter[];
-  logger?: HairyLogger;
+  logger?: HairyClawLogger;
 }
 
 /**
@@ -25,7 +25,7 @@ export class InitiativeEngine {
   /** Scheduled task IDs we created — used for cleanup */
   private readonly scheduledIds: string[] = [];
   /** Orchestrator handlers for proactive message dispatch */
-  private readonly messageHandlers: Array<(msg: HairyMessage) => void> = [];
+  private readonly messageHandlers: Array<(msg: HairyClawMessage) => void> = [];
 
   constructor(private readonly opts: InitiativeEngineOptions) {
     for (const rule of opts.rules) {
@@ -81,7 +81,7 @@ export class InitiativeEngine {
    * Register a synthetic message dispatch function.
    * Called by the Orchestrator after wiring its own handler.
    */
-  onProactiveMessage(handler: (msg: HairyMessage) => void): void {
+  onProactiveMessage(handler: (msg: HairyClawMessage) => void): void {
     this.messageHandlers.push(handler);
   }
 
@@ -161,7 +161,7 @@ export class InitiativeEngine {
     );
   }
 
-  private dispatchToOrchestrator(msg: HairyMessage): void {
+  private dispatchToOrchestrator(msg: HairyClawMessage): void {
     for (const handler of this.messageHandlers) {
       try {
         handler(msg);
@@ -172,9 +172,9 @@ export class InitiativeEngine {
   }
 
   /**
-   * Synthesise a HairyMessage from an initiative action prompt.
+   * Synthesise a HairyClawMessage from an initiative action prompt.
    */
-  buildProactiveMessage(action: string, ruleId: string): HairyMessage {
+  buildProactiveMessage(action: string, ruleId: string): HairyClawMessage {
     return {
       id: randomUUID(),
       channelId: "initiative",

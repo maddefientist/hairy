@@ -1,5 +1,5 @@
 {
-  "name": "@hairy/growth",
+  "name": "@hairyclaw/growth",
   "version": "0.1.0",
   "type": "module",
   "main": "./dist/index.js",
@@ -17,10 +17,10 @@
     "test": "vitest --run --passWithNoTests"
   },
   "dependencies": {
-    "@hairy/channels": "workspace:*",
-    "@hairy/core": "workspace:*",
-    "@hairy/memory": "workspace:*",
-    "@hairy/observability": "workspace:*",
+    "@hairyclaw/channels": "workspace:*",
+    "@hairyclaw/core": "workspace:*",
+    "@hairyclaw/memory": "workspace:*",
+    "@hairyclaw/observability": "workspace:*",
     "zod": "^3.24.2"
   }
 }

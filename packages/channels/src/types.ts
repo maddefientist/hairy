@@ -1,4 +1,4 @@
-import type { AgentResponse, HairyMessage } from "@hairy/core";
+import type { AgentResponse, HairyClawMessage } from "@hairyclaw/core";
 
 export interface StreamHandle {
   messageId: string;
@@ -12,7 +12,7 @@ export interface ChannelAdapter {
   disconnect(): Promise<void>;
   sendMessage(channelId: string, response: AgentResponse): Promise<void>;
   sendStreamStart?(channelId: string, initialText: string): Promise<StreamHandle>;
-  onMessage(handler: (msg: HairyMessage) => void): void;
+  onMessage(handler: (msg: HairyClawMessage) => void): void;
   startTyping(channelId: string): void;
   stopTyping(channelId: string): void;
   isConnected(): boolean;

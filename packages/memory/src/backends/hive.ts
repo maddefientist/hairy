@@ -83,7 +83,7 @@ export class HiveMemoryBackend implements MemoryBackend {
         headers: buildHeaders(writeKey),
         body: JSON.stringify({
           namespace: ns,
-          knowledge_items: [{ content, tags, source: "hairy-memory" }],
+          knowledge_items: [{ content, tags, source: "hairyclaw-memory" }],
         }),
       });
       if (res.ok) {

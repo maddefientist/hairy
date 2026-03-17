@@ -1,5 +1,5 @@
 import { setTimeout as delay } from "node:timers/promises";
-import type { HairyLogger as Logger } from "@hairy/observability";
+import type { HairyClawLogger as Logger } from "@hairyclaw/observability";
 import type { Tool, ToolContext, ToolResult } from "./types.js";
 
 interface RegistryOptions {

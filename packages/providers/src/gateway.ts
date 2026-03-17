@@ -1,4 +1,4 @@
-import type { Metrics } from "@hairy/observability";
+import type { Metrics } from "@hairyclaw/observability";
 import type { AuthProfile, AuthProfileManager } from "./auth-profiles.js";
 import { ModelRouter } from "./router.js";
 import type {

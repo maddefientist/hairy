@@ -1,4 +1,4 @@
-export interface HairyMessage {
+export interface HairyClawMessage {
   id: string;
   channelId: string;
   channelType: "telegram" | "whatsapp" | "webhook" | "cli";
@@ -81,7 +81,7 @@ export type TaskPriority = "urgent" | "user" | "task" | "background";
 export interface QueueItem {
   id: string;
   kind: "message" | "scheduled-task";
-  payload: HairyMessage | ScheduledTask;
+  payload: HairyClawMessage | ScheduledTask;
   enqueuedAt: string;
 }
 

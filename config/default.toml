@@ -1,5 +1,5 @@
 [agent]
-name = "Hairy"
+name = "HairyClaw"
 data_dir = "./data"
 max_iterations_per_run = 25
 max_context_tokens = 100000

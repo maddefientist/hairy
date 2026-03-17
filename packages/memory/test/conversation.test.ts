@@ -104,7 +104,7 @@ describe("ConversationMemory", () => {
     expect(history).toHaveLength(0);
   });
 
-  it("handles HairyMessage entries", async () => {
+  it("handles HairyClawMessage entries", async () => {
     const mem = new ConversationMemory({ filePath: tmpFile() });
 
     await mem.append({

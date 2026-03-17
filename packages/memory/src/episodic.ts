@@ -1,6 +1,6 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
-import type { RunResult } from "@hairy/core";
+import type { RunResult } from "@hairyclaw/core";
 import type { MemoryEvent } from "./types.js";
 
 interface EpisodicMemoryOptions {

@@ -1,9 +1,9 @@
 import { randomUUID } from "node:crypto";
-import type { AgentResponse, HairyMessage } from "@hairy/core";
+import type { AgentResponse, HairyClawMessage } from "@hairyclaw/core";
 import type { ChannelAdapter, StreamHandle } from "./types.js";
 
 export abstract class BaseAdapter implements ChannelAdapter {
-  private handler: ((msg: HairyMessage) => void) | null = null;
+  private handler: ((msg: HairyClawMessage) => void) | null = null;
   protected connected = false;
 
   abstract readonly channelType: string;
@@ -16,7 +16,7 @@ export abstract class BaseAdapter implements ChannelAdapter {
 
   sendStreamStart?(_channelId: string, _initialText: string): Promise<StreamHandle>;
 
-  onMessage(handler: (msg: HairyMessage) => void): void {
+  onMessage(handler: (msg: HairyClawMessage) => void): void {
     this.handler = handler;
   }
 
@@ -28,7 +28,7 @@ export abstract class BaseAdapter implements ChannelAdapter {
     return this.connected;
   }
 
-  protected emitMessage(message: Omit<HairyMessage, "id" | "timestamp">): void {
+  protected emitMessage(message: Omit<HairyClawMessage, "id" | "timestamp">): void {
     if (!this.handler) {
       return;
     }

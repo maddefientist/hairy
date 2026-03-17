@@ -1,4 +1,4 @@
-import type { HairyPlugin } from "../plugin.js";
+import type { HairyClawPlugin } from "../plugin.js";
 
 export interface CostGuardOptions {
   dailyBudgetUsd: number;
@@ -9,7 +9,7 @@ export interface CostGuardOptions {
 
 const utcDay = (date: Date): string => date.toISOString().slice(0, 10);
 
-export const createCostGuardPlugin = (opts: CostGuardOptions): HairyPlugin => {
+export const createCostGuardPlugin = (opts: CostGuardOptions): HairyClawPlugin => {
   let spendDay = utcDay(new Date());
   let dailySpend = 0;
   let alerted = false;

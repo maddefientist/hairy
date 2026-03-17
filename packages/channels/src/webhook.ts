@@ -1,5 +1,5 @@
 import { timingSafeEqual } from "node:crypto";
-import type { AgentResponse } from "@hairy/core";
+import type { AgentResponse } from "@hairyclaw/core";
 import { serve } from "@hono/node-server";
 import { Hono } from "hono";
 import { BaseAdapter } from "./adapter.js";

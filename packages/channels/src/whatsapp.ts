@@ -1,7 +1,7 @@
 import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
-import type { AgentResponse } from "@hairy/core";
-import type { HairyLogger as Logger } from "@hairy/observability";
+import type { AgentResponse } from "@hairyclaw/core";
+import type { HairyClawLogger as Logger } from "@hairyclaw/observability";
 import type { Boom } from "@hapi/boom";
 import makeWASocket, {
   type AnyMessageContent,

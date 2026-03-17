@@ -5,8 +5,8 @@ import type {
   DocumentAttachment,
   MediaAttachment,
   MessageContent,
-} from "@hairy/core";
-import type { HairyLogger as Logger } from "@hairy/observability";
+} from "@hairyclaw/core";
+import type { HairyClawLogger as Logger } from "@hairyclaw/observability";
 import { Bot, type Context, GrammyError, HttpError } from "grammy";
 import { TelegramClient } from "telegram";
 import { NewMessage, type NewMessageEvent } from "telegram/events/index.js";

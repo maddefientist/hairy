@@ -1,4 +1,4 @@
-import type { HairyPlugin } from "../plugin.js";
+import type { HairyClawPlugin } from "../plugin.js";
 
 export interface ContentSafetyOptions {
   blockedPatterns?: RegExp[];
@@ -56,7 +56,7 @@ const truncateText = (text: string, maxLength: number): string => {
   return `${text.slice(0, reserve)}\n${TRUNCATED_SUFFIX}`;
 };
 
-export const createContentSafetyPlugin = (opts: ContentSafetyOptions = {}): HairyPlugin => {
+export const createContentSafetyPlugin = (opts: ContentSafetyOptions = {}): HairyClawPlugin => {
   const blockedPatterns = opts.blockedPatterns ?? [];
   const protectEnvVars = opts.protectEnvVars ?? DEFAULT_ENV_VARS;
   const maxResponseLength = opts.maxResponseLength ?? DEFAULT_MAX_RESPONSE_LENGTH;

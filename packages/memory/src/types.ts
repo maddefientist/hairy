@@ -1,4 +1,4 @@
-import type { HairyMessage, RunResult } from "@hairy/core";
+import type { HairyClawMessage, RunResult } from "@hairyclaw/core";
 
 export interface SemanticRecord {
   id: string;
@@ -47,10 +47,10 @@ export interface MemoryEvent {
 }
 
 export type ConversationEntry =
-  | HairyMessage
+  | HairyClawMessage
   | { role: "assistant"; text: string; timestamp: string };
 
 export interface ReflectionInput {
   runResult: RunResult;
-  userMessage?: HairyMessage;
+  userMessage?: HairyClawMessage;
 }

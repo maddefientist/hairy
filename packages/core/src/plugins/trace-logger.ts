@@ -1,6 +1,6 @@
 import { appendFile, mkdir } from "node:fs/promises";
 import { join } from "node:path";
-import type { HairyPlugin, PluginContext } from "../plugin.js";
+import type { HairyClawPlugin, PluginContext } from "../plugin.js";
 
 export interface TraceLoggerOptions {
   logDir: string;
@@ -14,7 +14,7 @@ const filePathFor = (logDir: string, timestamp: string): string => {
   return join(logDir, `traces-${day}.jsonl`);
 };
 
-export const createTraceLoggerPlugin = (opts: TraceLoggerOptions): HairyPlugin => {
+export const createTraceLoggerPlugin = (opts: TraceLoggerOptions): HairyClawPlugin => {
   const includeContent = opts.includeContent ?? false;
 
   const writeEntry = async (entry: Record<string, unknown>): Promise<void> => {

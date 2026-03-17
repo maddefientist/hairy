@@ -1,8 +1,8 @@
 import { randomUUID } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
-import type { AgentResponse } from "@hairy/core";
-import type { HairyLogger } from "@hairy/observability";
+import type { AgentResponse } from "@hairyclaw/core";
+import type { HairyClawLogger } from "@hairyclaw/observability";
 
 export interface DeliveryItem {
   id: string;
@@ -21,7 +21,7 @@ export interface DeliveryQueueOptions {
   maxAttempts?: number;
   baseRetryMs?: number;
   maxRetryMs?: number;
-  logger?: HairyLogger;
+  logger?: HairyClawLogger;
 }
 
 interface DeliveryQueueState {
@@ -33,7 +33,7 @@ const DEFAULT_MAX_ATTEMPTS = 5;
 const DEFAULT_BASE_RETRY_MS = 5_000;
 const DEFAULT_MAX_RETRY_MS = 300_000;
 
-const noopLogger: HairyLogger = {
+const noopLogger: HairyClawLogger = {
   info: () => {},
   error: () => {},
   warn: () => {},
@@ -45,7 +45,7 @@ export class DeliveryQueue {
   private readonly maxAttempts: number;
   private readonly baseRetryMs: number;
   private readonly maxRetryMs: number;
-  private readonly logger: HairyLogger;
+  private readonly logger: HairyClawLogger;
   private state: DeliveryQueueState = { pending: [], deadLetters: [] };
   private lock: Promise<void> = Promise.resolve();
 

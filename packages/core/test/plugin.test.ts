@@ -1,8 +1,8 @@
 import { randomUUID } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
-import type { HairyPlugin, PluginContext } from "../src/plugin.js";
+import type { HairyClawPlugin, PluginContext } from "../src/plugin.js";
 import { PluginRunner } from "../src/plugin.js";
-import type { AgentResponse, HairyMessage, ToolCallRecord } from "../src/types.js";
+import type { AgentResponse, HairyClawMessage, ToolCallRecord } from "../src/types.js";
 
 const logger = {
   info: vi.fn(),
@@ -12,7 +12,7 @@ const logger = {
   child: () => logger,
 };
 
-const baseMessage = (text = "hello"): HairyMessage => ({
+const baseMessage = (text = "hello"): HairyClawMessage => ({
   id: randomUUID(),
   channelId: "c1",
   channelType: "cli",

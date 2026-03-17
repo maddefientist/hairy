@@ -28,7 +28,7 @@ export const buildSystemPrompt = async (opts: SystemPromptOptions): Promise<stri
   const identity = await readOrEmpty(join(opts.dataDir, "memory", "identity.md"));
   const knowledge = await readOrEmpty(join(opts.dataDir, "memory", "knowledge.md"));
 
-  const parts = [`You are ${opts.agentName ?? "Hairy"}, an autonomous assistant.`];
+  const parts = [`You are ${opts.agentName ?? "HairyClaw"}, an autonomous assistant.`];
 
   if (opts.channel) {
     parts.push(`Current channel: ${opts.channel}`);

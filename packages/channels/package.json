@@ -1,5 +1,5 @@
 {
-  "name": "@hairy/channels",
+  "name": "@hairyclaw/channels",
   "version": "0.1.0",
   "type": "module",
   "main": "./dist/index.js",
@@ -17,8 +17,8 @@
     "test": "vitest --run --passWithNoTests"
   },
   "dependencies": {
-    "@hairy/core": "workspace:*",
-    "@hairy/observability": "workspace:*",
+    "@hairyclaw/core": "workspace:*",
+    "@hairyclaw/observability": "workspace:*",
     "@hapi/boom": "^10.0.1",
     "@hono/node-server": "^1.19.10",
     "@types/qrcode-terminal": "^0.12.2",

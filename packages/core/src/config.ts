@@ -85,7 +85,7 @@ const memorySchema = z.object({
 
 const configSchema = z.object({
   agent: z.object({
-    name: z.string().default("Hairy"),
+    name: z.string().default("HairyClaw"),
     data_dir: z.string().default("./data"),
     max_iterations_per_run: z.number().int().positive().default(25),
     max_context_tokens: z.number().int().positive().default(100000),
@@ -156,7 +156,7 @@ const configSchema = z.object({
   }),
 });
 
-export type HairyConfig = z.infer<typeof configSchema>;
+export type HairyClawConfig = z.infer<typeof configSchema>;
 
 const parseTomlFile = async (path: string): Promise<Record<string, unknown>> => {
   try {
@@ -199,14 +199,14 @@ const mergeObjects = (
   return result;
 };
 
-export const loadConfig = async (configDir = "config"): Promise<HairyConfig> => {
+export const loadConfig = async (configDir = "config"): Promise<HairyClawConfig> => {
   const defaults = await parseTomlFile(join(configDir, "default.toml"));
   const production = await parseTomlFile(join(configDir, "production.toml"));
   const local = await parseTomlFile(join(configDir, "local.toml"));
 
   const envOverride: Record<string, unknown> = {
     health: {
-      port: process.env.HAIRY_HEALTH_PORT ? Number(process.env.HAIRY_HEALTH_PORT) : undefined,
+      port: process.env.HAIRYCLAW_HEALTH_PORT ? Number(process.env.HAIRYCLAW_HEALTH_PORT) : undefined,
     },
   };
 

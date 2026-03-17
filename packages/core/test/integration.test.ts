@@ -19,7 +19,7 @@ import type {
 } from "../src/agent-loop.js";
 import { Orchestrator } from "../src/orchestrator.js";
 import { TaskQueue } from "../src/task-queue.js";
-import type { AgentResponse, HairyMessage } from "../src/types.js";
+import type { AgentResponse, HairyClawMessage } from "../src/types.js";
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
@@ -37,7 +37,7 @@ const noopMetrics = {
   getAll: vi.fn(() => ({})),
 };
 
-const userMessage = (text: string): HairyMessage => ({
+const userMessage = (text: string): HairyClawMessage => ({
   id: randomUUID(),
   channelId: "test-channel",
   channelType: "cli",

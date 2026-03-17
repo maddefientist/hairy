@@ -3,7 +3,7 @@
  * Delegates to whichever MemoryBackend is configured (local, hive, etc.)
  * No vendor lock-in — works out of the box with local JSON backend.
  */
-import type { MemoryBackend, SearchResult } from "@hairy/memory";
+import type { MemoryBackend, SearchResult } from "@hairyclaw/memory";
 import { z } from "zod";
 import type { Tool } from "../types.js";
 

@@ -26,7 +26,7 @@ export const createPdfExtractTool = (): Tool => ({
       if (input.source.startsWith("http://") || input.source.startsWith("https://")) {
         const response = await fetch(input.source, {
           headers: {
-            "user-agent": "Mozilla/5.0 (compatible; Betki/1.0)",
+            "user-agent": "Mozilla/5.0 (compatible; HairyClaw/1.0)",
             accept: "application/pdf,*/*",
           },
           redirect: "follow",

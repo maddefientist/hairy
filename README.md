@@ -1,8 +1,8 @@
-# Hairy
+# HairyClaw
 
 > An autonomous, long-running, self-growing agent framework.
 
-Hairy is a reusable TypeScript template for building persistent AI agents that:
+HairyClaw is a reusable TypeScript template for building persistent AI agents that:
 - Run 24/7 as daemon processes
 - Connect to users through multiple channels (CLI, Telegram, WhatsApp, webhooks)
 - Reason with multimodal LLMs (Anthropic Claude, Google Gemini, OpenRouter, Ollama)
@@ -15,9 +15,9 @@ Hairy is a reusable TypeScript template for building persistent AI agents that:
 
 ---
 
-## What is Hairy?
+## What is HairyClaw?
 
-Hairy is not a pre-built agent. It's a **framework** — a starting template with:
+HairyClaw is not a pre-built agent. It's a **framework** — a starting template with:
 - A monorepo structure (7 packages + 1 app)
 - Pluggable LLM providers (Anthropic, Google Gemini, OpenRouter, Ollama)
 - Multi-channel adapters (Telegram, WhatsApp, webhooks, CLI)
@@ -27,7 +27,7 @@ Hairy is not a pre-built agent. It's a **framework** — a starting template wit
 - Sidecar protocol for compute-heavy extensions (Rust/Go)
 
 You customize it by:
-1. Editing `apps/hairy-agent/src/main.ts` to wire your providers, channels, and tools
+1. Editing `apps/hairyclaw-agent/src/main.ts` to wire your providers, channels, and tools
 2. Adding custom skills and system prompts in `data/memory/`
 3. Writing Rust/Go sidecars to handle specialized work
 4. Configuring rules in TOML files
@@ -179,7 +179,7 @@ pnpm dev
 
 You should see:
 ```
-info: hairy-agent started
+info: hairyclaw-agent started
 ```
 
 Then:
@@ -356,7 +356,7 @@ export const createMyTool = (): Tool => ({
 });
 ```
 
-Register in `apps/hairy-agent/src/main.ts`:
+Register in `apps/hairyclaw-agent/src/main.ts`:
 ```typescript
 registry.register(createMyTool());
 ```
@@ -364,7 +364,7 @@ registry.register(createMyTool());
 ### Create a Skill
 
 1. Create `data/skills/<skill-id>/SKILL.md` with description
-2. Edit `apps/hairy-agent/src/main.ts` to include prompt fragment
+2. Edit `apps/hairyclaw-agent/src/main.ts` to include prompt fragment
 3. Mark as "promoted" in skill registry when ready
 
 ### Build a Rust Sidecar
@@ -441,7 +441,7 @@ Full details: [ARCHITECTURE.md](ARCHITECTURE.md)
 ## Project Structure
 
 ```
-apps/hairy-agent/              # Main daemon
+apps/hairyclaw-agent/              # Main daemon
 packages/
   observability/               # Logging, metrics, tracing
   core/                        # Queue, scheduler, orchestrator

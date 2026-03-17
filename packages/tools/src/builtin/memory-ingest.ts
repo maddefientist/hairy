@@ -2,7 +2,7 @@
  * memory_ingest — store knowledge in long-term memory.
  * Delegates to whichever MemoryBackend is configured (local, hive, etc.)
  */
-import type { MemoryBackend } from "@hairy/memory";
+import type { MemoryBackend } from "@hairyclaw/memory";
 import { z } from "zod";
 import type { Tool } from "../types.js";
 

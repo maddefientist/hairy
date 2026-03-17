@@ -1,4 +1,4 @@
-import type { HairyLogger as Logger } from "@hairy/observability";
+import type { HairyClawLogger as Logger } from "@hairyclaw/observability";
 import type { ZodSchema } from "zod";
 
 export interface Tool {

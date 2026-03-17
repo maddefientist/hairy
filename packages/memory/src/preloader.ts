@@ -1,5 +1,5 @@
-import type { HairyPlugin } from "@hairy/core";
-import type { HairyLogger } from "@hairy/observability";
+import type { HairyClawPlugin } from "@hairyclaw/core";
+import type { HairyClawLogger } from "@hairyclaw/observability";
 import type { MemoryBackend, SearchResult } from "./types.js";
 
 export interface MemoryPreloaderOptions {
@@ -8,7 +8,7 @@ export interface MemoryPreloaderOptions {
   minScore?: number;
   maxChars?: number;
   cacheTtlMs?: number;
-  logger?: HairyLogger;
+  logger?: HairyClawLogger;
 }
 
 interface CacheEntry {
@@ -21,7 +21,7 @@ const DEFAULT_MIN_SCORE = 0.3;
 const DEFAULT_MAX_CHARS = 2_000;
 const DEFAULT_CACHE_TTL_MS = 5_000;
 
-const noopLogger: HairyLogger = {
+const noopLogger: HairyClawLogger = {
   info: () => {},
   error: () => {},
   warn: () => {},
@@ -83,7 +83,7 @@ const renderMemories = (results: SearchResult[], maxChars: number): string => {
   return lines.join("\n");
 };
 
-export const createMemoryPreloadPlugin = (opts: MemoryPreloaderOptions): HairyPlugin => {
+export const createMemoryPreloadPlugin = (opts: MemoryPreloaderOptions): HairyClawPlugin => {
   const topK = opts.topK ?? DEFAULT_TOP_K;
   const minScore = opts.minScore ?? DEFAULT_MIN_SCORE;
   const maxChars = opts.maxChars ?? DEFAULT_MAX_CHARS;

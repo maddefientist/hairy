@@ -1,10 +1,10 @@
 import { randomUUID } from "node:crypto";
-import { type HairyLogger, type Metrics, createTrace } from "@hairy/observability";
+import { type HairyClawLogger, type Metrics, createTrace } from "@hairyclaw/observability";
 import type { PluginContext, PluginRunner } from "./plugin.js";
 import type { TaskQueue } from "./task-queue.js";
 import type {
   AgentResponse,
-  HairyMessage,
+  HairyClawMessage,
   QueueItem,
   RunResult,
   TokenUsage,
@@ -12,12 +12,12 @@ import type {
 } from "./types.js";
 
 interface OrchestratorDeps {
-  logger: HairyLogger;
+  logger: HairyClawLogger;
   metrics: Metrics;
   queue: TaskQueue;
   plugins?: PluginRunner;
   handleRun: (
-    message: HairyMessage,
+    message: HairyClawMessage,
     traceId: string,
     pluginCtx: PluginContext,
   ) => Promise<AgentResponse>;
@@ -50,7 +50,7 @@ export class Orchestrator {
     this.started = false;
   }
 
-  async handleMessage(message: HairyMessage): Promise<void> {
+  async handleMessage(message: HairyClawMessage): Promise<void> {
     const item: QueueItem = {
       id: randomUUID(),
       kind: "message",
@@ -98,7 +98,7 @@ export class Orchestrator {
           logger: this.deps.logger,
         };
 
-        let effectiveMessage: HairyMessage | null = message;
+        let effectiveMessage: HairyClawMessage | null = message;
         if (this.deps.plugins) {
           effectiveMessage = await this.deps.plugins.runOnUserMessage(message, pluginCtx);
           if (effectiveMessage === null) {

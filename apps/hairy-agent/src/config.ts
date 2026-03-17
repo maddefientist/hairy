@@ -1,6 +1,6 @@
 import { existsSync } from "node:fs";
 import { resolve } from "node:path";
-import { loadConfig } from "@hairy/core";
+import { loadConfig } from "@hairyclaw/core";
 import { z } from "zod";
 
 const parseBooleanEnv = (value: string | undefined): boolean | undefined => {
@@ -66,7 +66,7 @@ interface ProviderRuntimeConfig {
   baseUrl?: string;
 }
 
-export interface HairyRuntimeConfig {
+export interface HairyClawRuntimeConfig {
   agentName: string;
   dataDir: string;
   healthPort: number;
@@ -137,7 +137,7 @@ export interface HairyRuntimeConfig {
   };
 }
 
-export const loadHairyConfig = async (): Promise<HairyRuntimeConfig> => {
+export const loadHairyClawConfig = async (): Promise<HairyClawRuntimeConfig> => {
   const configDir = resolve(process.cwd(), "config");
   if (!existsSync(configDir)) {
     throw new Error(`config directory does not exist: ${configDir}`);

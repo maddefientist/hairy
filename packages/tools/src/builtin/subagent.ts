@@ -3,8 +3,8 @@ import {
   type AgentLoopResult,
   type ToolExecutor,
   runAgentLoop,
-} from "@hairy/core";
-import type { HairyLogger } from "@hairy/observability";
+} from "@hairyclaw/core";
+import type { HairyClawLogger } from "@hairyclaw/observability";
 import { z } from "zod";
 import type { Tool, ToolContext } from "../types.js";
 
@@ -14,7 +14,7 @@ const subAgentArgsSchema = z.object({
 
 const DEFAULT_TIMEOUT_MS = 120_000;
 
-const noopLogger: HairyLogger = {
+const noopLogger: HairyClawLogger = {
   info: () => {},
   error: () => {},
   warn: () => {},
@@ -41,7 +41,7 @@ export interface SubAgentToolOptions {
   provider?: AgentLoopProvider;
   executor?: ToolExecutor;
   runLoop?: RunAgentLoopFn;
-  logger?: HairyLogger;
+  logger?: HairyClawLogger;
 }
 
 const toToolDef = (

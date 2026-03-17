@@ -2,7 +2,7 @@ import { spawn } from "node:child_process";
 import { constants } from "node:fs";
 import { access, readFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
-import type { HairyLogger as Logger } from "@hairy/observability";
+import type { HairyClawLogger as Logger } from "@hairyclaw/observability";
 import { z } from "zod";
 import type { ToolRegistry } from "../registry.js";
 import type { Tool } from "../types.js";

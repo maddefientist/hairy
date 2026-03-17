@@ -1,5 +1,5 @@
 {
-  "name": "hairy-agent",
+  "name": "hairyclaw-agent",
   "version": "0.1.0",
   "type": "module",
   "main": "./dist/main.js",
@@ -12,13 +12,13 @@
     "dev": "tsx src/main.ts"
   },
   "dependencies": {
-    "@hairy/channels": "workspace:*",
-    "@hairy/core": "workspace:*",
-    "@hairy/growth": "workspace:*",
-    "@hairy/memory": "workspace:*",
-    "@hairy/observability": "workspace:*",
-    "@hairy/providers": "workspace:*",
-    "@hairy/tools": "workspace:*",
+    "@hairyclaw/channels": "workspace:*",
+    "@hairyclaw/core": "workspace:*",
+    "@hairyclaw/growth": "workspace:*",
+    "@hairyclaw/memory": "workspace:*",
+    "@hairyclaw/observability": "workspace:*",
+    "@hairyclaw/providers": "workspace:*",
+    "@hairyclaw/tools": "workspace:*",
     "@hono/node-server": "^1.19.10",
     "hono": "^4.12.5",
     "zod": "^3.24.2"

@@ -1,5 +1,5 @@
 {
-  "name": "@hairy/memory",
+  "name": "@hairyclaw/memory",
   "version": "0.1.0",
   "type": "module",
   "main": "./dist/index.js",
@@ -17,8 +17,8 @@
     "test": "vitest --run --passWithNoTests"
   },
   "dependencies": {
-    "@hairy/core": "workspace:*",
-    "@hairy/observability": "workspace:*",
+    "@hairyclaw/core": "workspace:*",
+    "@hairyclaw/observability": "workspace:*",
     "zod": "^3.24.2"
   }
 }
