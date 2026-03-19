@@ -709,91 +709,9 @@ export class TelegramAdapter extends BaseAdapter {
     }
   }
 
-  async sendStreamStart(channelId: string, initialText: string): Promise<StreamHandle> {
-    if (this.opts.mode !== "bot" || !this.bot) {
-      throw new Error("telegram streaming is only available in bot mode after connect()");
-    }
-
-    const chatId = Number(channelId);
-    if (Number.isNaN(chatId)) {
-      throw new Error("telegram: invalid chat id for streaming");
-    }
-
-    const botApi = this.bot.api;
-    const sent = await botApi.sendMessage(chatId, initialText);
-    let currentText = initialText;
-    let pendingText: string | null = null;
-    let nextAllowedEditAt = 0;
-    let worker: Promise<void> | null = null;
-    let finalized = false;
-
-    const editMessage = async (text: string): Promise<void> => {
-      if (text === currentText) {
-        return;
-      }
-
-      try {
-        await botApi.editMessageText(chatId, sent.message_id, text);
-        currentText = text;
-      } catch (error: unknown) {
-        if (isMessageNotModified(error)) {
-          return;
-        }
-        throw error;
-      }
-    };
-
-    const runWorker = (): Promise<void> => {
-      if (worker) {
-        return worker;
-      }
-
-      worker = (async () => {
-        while (pendingText !== null) {
-          const target = pendingText;
-          pendingText = null;
-
-          const waitMs = Math.max(0, nextAllowedEditAt - Date.now());
-          if (waitMs > 0) {
-            await new Promise((resolve) => setTimeout(resolve, waitMs));
-          }
-
-          await editMessage(target);
-          nextAllowedEditAt = Date.now() + STREAM_EDIT_DEBOUNCE_MS;
-        }
-      })().finally(() => {
-        worker = null;
-      });
-
-      return worker;
-    };
-
-    return {
-      messageId: String(sent.message_id),
-      update: async (text: string) => {
-        if (finalized) {
-          return;
-        }
-        pendingText = text;
-        await runWorker();
-      },
-      finalize: async (text: string) => {
-        if (finalized) {
-          return;
-        }
-
-        finalized = true;
-        pendingText = text;
-        nextAllowedEditAt = 0;
-
-        try {
-          await runWorker();
-        } finally {
-          this.stopTyping(channelId);
-        }
-      },
-    };
-  }
+  // sendStreamStart intentionally removed — Telegram messages are sent complete
+  // after the agent finishes processing. The typing indicator shows activity.
+  // To re-enable streaming edits, restore this method from git history.
 
   async disconnect(): Promise<void> {
     if (this.bot) {
@@ -865,17 +783,31 @@ export class TelegramAdapter extends BaseAdapter {
     }
   }
 
+  private typingIntervals = new Map<string, ReturnType<typeof setInterval>>();
+
   override startTyping(channelId: string): void {
     if (this.opts.mode !== "bot" || !this.bot) return;
     const chatId = Number(channelId);
     if (Number.isNaN(chatId)) return;
-    this.bot.api.sendChatAction(chatId, "typing").catch(() => {
-      // Best-effort — ignore errors
-    });
+
+    // Clear any existing interval for this chat
+    this.stopTyping(channelId);
+
+    const bot = this.bot;
+    // Send immediately, then repeat every 4s (Telegram expires typing after ~5s)
+    bot.api.sendChatAction(chatId, "typing").catch(() => {});
+    const interval = setInterval(() => {
+      bot.api.sendChatAction(chatId, "typing").catch(() => {});
+    }, 4_000);
+    this.typingIntervals.set(channelId, interval);
   }
 
-  override stopTyping(_channelId: string): void {
-    // Telegram typing indicator auto-expires quickly; no explicit stop API.
+  override stopTyping(channelId: string): void {
+    const interval = this.typingIntervals.get(channelId);
+    if (interval) {
+      clearInterval(interval);
+      this.typingIntervals.delete(channelId);
+    }
   }
 }
 
