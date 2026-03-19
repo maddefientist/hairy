@@ -1,0 +1,82 @@
+# Production config template for HairyClaw deployments
+# Copy and customize per-deployment via config/local.toml (gitignored)
+#
+# Layering: default.toml → production.toml → local.toml → env vars
+
+[agent]
+name = "HairyClaw"
+data_dir = "./data"
+max_iterations_per_run = 25
+
+[health]
+port = 9090
+
+[providers.anthropic]
+enabled = true
+default_model = "claude-sonnet-4-20250514"
+
+[providers.ollama]
+enabled = true
+base_url = "http://192.168.1.225:11434"
+default_model = "minimax-m2.7:cloud"
+
+[providers.gemini]
+enabled = false
+default_model = "gemini-2.5-flash"
+
+[providers.openrouter]
+enabled = false
+default_model = "anthropic/claude-sonnet-4-20250514"
+
+[routing]
+default_provider = "ollama"
+fallback_chain = ["ollama", "anthropic", "gemini"]
+
+[routing.cost]
+track = true
+daily_budget_usd = 10.0
+alert_threshold_pct = 80
+
+[channels.telegram]
+enabled = false
+mode = "bot"
+
+[channels.whatsapp]
+enabled = false
+
+[channels.webhook]
+enabled = false
+port = 8080
+
+[channels.cli]
+enabled = true
+
+[resilience]
+cooldown_base_ms = 15000
+cooldown_max_ms = 300000
+cooldown_threshold = 1
+request_timeout_ms = 120000
+
+[delivery]
+max_attempts = 5
+base_retry_ms = 5000
+max_retry_ms = 300000
+
+[memory]
+auto_preload = true
+preload_top_k = 3
+preload_min_score = 0.3
+preload_max_chars = 2000
+
+[growth]
+reflection_enabled = true
+initiative_enabled = false
+skill_auto_promote = false
+
+[tools.bash]
+timeout_ms = 60000
+max_output_bytes = 2097152
+
+[tools.sidecar]
+auto_build = true
+health_check_interval_ms = 30000

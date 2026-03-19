@@ -17,3 +17,7 @@ dist/
 *.d.ts
 *.d.ts.map
 *.js.map
+
+# Deployment-specific
+config/local.toml
+config/*.bak*
