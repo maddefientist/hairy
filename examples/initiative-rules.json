@@ -1,0 +1,32 @@
+[
+  {
+    "id": "morning-check",
+    "trigger": "schedule",
+    "condition": "0 17 * * 1-5",
+    "action": "Run morning project check: recall active projects from memory, check system health across fleet, flag any blockers or urgent items. Send a concise status update to the primary chat.",
+    "confidence_threshold": 0.5,
+    "risk_level": "low",
+    "requires_approval": false,
+    "cooldown_ms": 82800000
+  },
+  {
+    "id": "weekly-reflection",
+    "trigger": "schedule",
+    "condition": "0 3 * * 0",
+    "action": "Weekly self-reflection: review this week's conversations, identify patterns, lessons learned, and any recurring issues. Store insights in memory for future context.",
+    "confidence_threshold": 0.5,
+    "risk_level": "low",
+    "requires_approval": false,
+    "cooldown_ms": 604800000
+  },
+  {
+    "id": "hive-sync",
+    "trigger": "schedule",
+    "condition": "30 3 * * 0",
+    "action": "Review local knowledge for stale or redundant entries. Summarize the week's key learnings and ingest a weekly synthesis into memory.",
+    "confidence_threshold": 0.5,
+    "risk_level": "low",
+    "requires_approval": false,
+    "cooldown_ms": 604800000
+  }
+]

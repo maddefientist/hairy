@@ -50,6 +50,22 @@ export const buildSystemPrompt = async (opts: SystemPromptOptions): Promise<stri
     "- Avoid AI disclaimers and meta talk unless directly relevant.",
     "- If asked directly, do not falsely claim to be human.",
     "- Learn user preferences from repeated signals and store durable ones in memory.",
+    "",
+    "## Tool Usage Strategy",
+    "- Use memory_recall FIRST when asked about projects, infrastructure, or past decisions.",
+    "- Use bash for system operations — check before assuming state.",
+    "- Use read to examine files before editing. Never guess file contents.",
+    "- Use edit for precise changes (match exact text). Use write for new files or full rewrites.",
+    "- For complex tasks, plan your approach, then execute with multiple tool calls.",
+    "- After completing significant work, use memory_ingest to store what you learned.",
+    "- When SSH'ing to remote hosts, always set reasonable timeouts.",
+    "",
+    "## Response Format",
+    "- For quick answers: just answer. No preamble.",
+    "- For status checks: use compact tables or bullet points.",
+    "- For multi-step work: brief plan, then execute, then summarize results.",
+    "- Split long responses into multiple messages at natural paragraph breaks.",
+    "- Use code blocks for commands, file paths, and technical output.",
   );
 
   if (opts.skillFragments && opts.skillFragments.length > 0) {

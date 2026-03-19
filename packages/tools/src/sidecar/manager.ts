@@ -55,9 +55,18 @@ export class SidecarManager {
   constructor(private readonly opts: SidecarManagerOptions) {}
 
   async loadAll(sidecarsDir: string): Promise<void> {
-    const candidateDirs = ["example-rust", "example-go", "browser"];
-    for (const name of candidateDirs) {
-      const dir = join(sidecarsDir, name);
+    let entries: Array<{ name: string; isDirectory: () => boolean }>;
+    try {
+      const { readdir } = await import("node:fs/promises");
+      entries = await readdir(sidecarsDir, { withFileTypes: true });
+    } catch {
+      this.opts.logger.debug({ sidecarsDir }, "sidecars directory not found; skipping");
+      return;
+    }
+
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue;
+      const dir = join(sidecarsDir, entry.name);
       const manifestPath = join(dir, "manifest.json");
 
       try {
@@ -65,7 +74,15 @@ export class SidecarManager {
         const manifest = manifestSchema.parse(JSON.parse(raw)) as SidecarManifest;
         await this.start(manifest, dir);
       } catch (error: unknown) {
-        this.opts.logger.warn({ err: error, sidecarDir: dir }, "failed to load sidecar; skipping");
+        // Only warn if manifest.json exists but is invalid — skip silently if missing
+        const isNotFound =
+          error instanceof Error && "code" in error && (error as { code: string }).code === "ENOENT";
+        if (!isNotFound) {
+          this.opts.logger.warn(
+            { err: error, sidecarDir: dir },
+            "failed to load sidecar; skipping",
+          );
+        }
       }
     }
   }
