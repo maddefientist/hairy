@@ -79,6 +79,7 @@ export interface ExecutorModeConfig {
   temperature: number;
   maxTokens: number;
   maxIterations: number;
+  systemPrompt: string; // custom override — empty = use built-in structured prompt
 }
 
 export interface HairyClawRuntimeConfig {
@@ -258,6 +259,7 @@ export const loadHairyClawConfig = async (): Promise<HairyClawRuntimeConfig> => 
       temperature: base.executor.temperature,
       maxTokens: base.executor.max_tokens,
       maxIterations: base.executor.max_iterations,
+      systemPrompt: process.env.EXECUTOR_SYSTEM_PROMPT ?? base.executor.system_prompt ?? "",
     },
     providers,
     routing: {

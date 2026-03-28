@@ -248,6 +248,39 @@ const parseModelSpec = (
   return { provider: spec.slice(0, slashIdx), model: spec.slice(slashIdx + 1) };
 };
 
+/** Build a structured executor system prompt that small/local models can follow reliably. */
+const buildExecutorSystemPrompt = (toolDefs: AgentLoopToolDef[], context?: string): string => {
+  const toolList = toolDefs.map((t) => `  - ${t.name}: ${t.description}`).join("\n");
+
+  const sections = [
+    "# ROLE",
+    "You are an executor agent. You receive one instruction and execute it using your tools.",
+    "",
+    "# RULES",
+    "1. Follow the instruction EXACTLY. Do not improvise or add extra steps.",
+    "2. Use the MINIMUM number of tool calls needed. One tool call per step.",
+    "3. NEVER ask questions. If something is unclear, make a reasonable assumption and proceed.",
+    "4. After completing the work, respond with a SHORT summary of what you did and the results.",
+    "5. If a tool call fails, try ONE alternative approach. If that also fails, report the error.",
+    "6. Do NOT explain your reasoning. Just do the work and report results.",
+    "",
+    "# YOUR TOOLS",
+    toolList,
+    "",
+    "# OUTPUT FORMAT",
+    "When done, respond with:",
+    "- RESULT: [what you found/did]",
+    "- FILES: [any files created or modified, if applicable]",
+    "- ERROR: [any errors encountered, if applicable]",
+  ];
+
+  if (context) {
+    sections.push("", "# CONTEXT", context);
+  }
+
+  return sections.join("\n");
+};
+
 /** Create a "delegate" tool that spawns an executor agent loop with a different model. */
 const createDelegateTool = (deps: {
   executorGateway: ProviderGateway;
@@ -257,16 +290,35 @@ const createDelegateTool = (deps: {
   executorTemperature: number;
   executorMaxTokens: number;
   executorMaxIterations: number;
+  executorSystemPromptOverride: string;
   registry: ToolRegistry;
   logger: HairyClawLogger;
   dataDir: string;
 }): Tool => ({
   name: "delegate",
-  description:
-    "Delegate a task to the executor agent. The executor has system tools (bash, read, write, edit, web-search, etc.) and will follow your instruction precisely. Write clear, specific instructions.",
+  description: [
+    "Delegate a task to the executor agent who has system tools (bash, read, write, edit, web-search).",
+    "",
+    "IMPORTANT — write your instruction as a SPECIFIC, STEP-BY-STEP command:",
+    "  GOOD: 'Read the file at /path/to/file.ts and tell me the name of the exported function on line 15'",
+    "  GOOD: 'Run `ls -la /tmp` and report the output'",
+    "  GOOD: 'Create a file at /tmp/hello.txt with the content: Hello World'",
+    "  BAD:  'Look into the project and see what you find'",
+    "  BAD:  'Help me understand the codebase'",
+    "",
+    "The executor is a FAST, LITERAL tool-runner — not a thinker. Give it exact commands.",
+  ].join("\n"),
   parameters: z.object({
-    instruction: z.string().min(1).describe("Detailed instruction for the executor to follow"),
-    context: z.string().optional().describe("Optional context/background for the executor"),
+    instruction: z
+      .string()
+      .min(1)
+      .describe(
+        "Step-by-step instruction for the executor. Be specific: name exact files, commands, paths, and expected output format.",
+      ),
+    context: z
+      .string()
+      .optional()
+      .describe("Background info the executor needs (file contents, variable values, etc.)"),
   }),
   async execute(args, ctx) {
     const input = z
@@ -276,13 +328,9 @@ const createDelegateTool = (deps: {
       })
       .parse(args);
 
-    const systemPrompt = [
-      "You are an executor agent. Follow the instruction precisely with minimal tool calls.",
-      "Report your results clearly. Do not ask follow-up questions — just do the work.",
-      input.context ? `\nContext: ${input.context}` : "",
-    ]
-      .filter(Boolean)
-      .join("\n");
+    const systemPrompt = deps.executorSystemPromptOverride
+      ? deps.executorSystemPromptOverride
+      : buildExecutorSystemPrompt(deps.executorToolDefs, input.context);
 
     const loopMessages: AgentLoopMessage[] = [
       { role: "user", content: [{ type: "text", text: input.instruction }] },
@@ -853,6 +901,7 @@ const main = async (): Promise<void> => {
       executorTemperature: config.executorConfig.temperature,
       executorMaxTokens: config.executorConfig.maxTokens,
       executorMaxIterations: config.executorConfig.maxIterations,
+      executorSystemPromptOverride: config.executorConfig.systemPrompt,
       registry,
       logger,
       dataDir: config.dataDir,

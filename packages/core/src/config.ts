@@ -96,6 +96,7 @@ const executorSchema = z.object({
   temperature: z.number().min(0).max(2).default(0.1),
   max_tokens: z.number().int().positive().default(4096),
   max_iterations: z.number().int().positive().default(5),
+  system_prompt: z.string().default(""),
 });
 
 const configSchema = z.object({
@@ -118,6 +119,7 @@ const configSchema = z.object({
     temperature: 0.1,
     max_tokens: 4096,
     max_iterations: 5,
+    system_prompt: "",
   }),
   health: z.object({
     port: z.number().int().positive().default(9090),

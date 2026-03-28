@@ -25,6 +25,8 @@ tools = ["bash", "read", "write", "edit", "web_search", "web_fetch"]
 temperature = 0.1
 max_tokens = 4096
 max_iterations = 5
+# Optional: override the executor system prompt entirely (leave empty for default)
+system_prompt = ""
 
 [health]
 port = 9090
