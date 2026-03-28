@@ -3,6 +3,28 @@ name = "HairyClaw"
 data_dir = "./data"
 max_iterations_per_run = 25
 max_context_tokens = 100000
+# Agent mode: "unified" (single model, all tools) or "orchestrator" (brain/hands split)
+mode = "unified"
+
+# Orchestrator mode settings (only used when mode = "orchestrator")
+# The orchestrator (brain) reasons, plans, and delegates.
+# The executor (hands) runs tools with focused instructions.
+[orchestrator]
+# provider/model for the brain — cloud model with strong reasoning
+model = ""
+# Tools the orchestrator gets (delegate + memory by default)
+tools = ["delegate", "memory_recall", "memory_ingest"]
+temperature = 0.7
+max_tokens = 4096
+
+[executor]
+# provider/model for the hands — can be a smaller/local model
+model = ""
+# Tools the executor gets (system tools by default)
+tools = ["bash", "read", "write", "edit", "web_search", "web_fetch"]
+temperature = 0.1
+max_tokens = 4096
+max_iterations = 5
 
 [health]
 port = 9090

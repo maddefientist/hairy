@@ -12,6 +12,7 @@ import {
 } from "@hairyclaw/channels";
 import {
   type AgentLoopMessage,
+  type AgentLoopStreamOptions,
   type AgentLoopToolDef,
   CommandRouter,
   type HairyClawPlugin,
@@ -234,6 +235,105 @@ const parseCsvEnv = (value: string | undefined): string[] => {
     .map((item) => item.trim())
     .filter((item) => item.length > 0);
 };
+
+/** Parse "provider/model" string into parts. Falls back to defaultProvider if no slash. */
+const parseModelSpec = (
+  spec: string,
+  defaultProvider: string,
+): { provider: string; model: string } => {
+  const slashIdx = spec.indexOf("/");
+  if (slashIdx <= 0) {
+    return { provider: defaultProvider, model: spec || defaultProvider };
+  }
+  return { provider: spec.slice(0, slashIdx), model: spec.slice(slashIdx + 1) };
+};
+
+/** Create a "delegate" tool that spawns an executor agent loop with a different model. */
+const createDelegateTool = (deps: {
+  executorGateway: ProviderGateway;
+  executorModel: string;
+  executorTools: Tool[];
+  executorToolDefs: AgentLoopToolDef[];
+  executorTemperature: number;
+  executorMaxTokens: number;
+  executorMaxIterations: number;
+  registry: ToolRegistry;
+  logger: HairyClawLogger;
+  dataDir: string;
+}): Tool => ({
+  name: "delegate",
+  description:
+    "Delegate a task to the executor agent. The executor has system tools (bash, read, write, edit, web-search, etc.) and will follow your instruction precisely. Write clear, specific instructions.",
+  parameters: z.object({
+    instruction: z.string().min(1).describe("Detailed instruction for the executor to follow"),
+    context: z.string().optional().describe("Optional context/background for the executor"),
+  }),
+  async execute(args, ctx) {
+    const input = z
+      .object({
+        instruction: z.string().min(1),
+        context: z.string().optional(),
+      })
+      .parse(args);
+
+    const systemPrompt = [
+      "You are an executor agent. Follow the instruction precisely with minimal tool calls.",
+      "Report your results clearly. Do not ask follow-up questions — just do the work.",
+      input.context ? `\nContext: ${input.context}` : "",
+    ]
+      .filter(Boolean)
+      .join("\n");
+
+    const loopMessages: AgentLoopMessage[] = [
+      { role: "user", content: [{ type: "text", text: input.instruction }] },
+    ];
+
+    try {
+      const result = await runAgentLoop(loopMessages, {
+        provider: {
+          stream: (msgs, streamOpts) =>
+            deps.executorGateway.stream(msgs, {
+              ...streamOpts,
+              model: deps.executorModel,
+            }),
+        },
+        executor: async (name, toolArgs, _callId) => {
+          const execution = await deps.registry.execute(name, toolArgs, {
+            traceId: ctx.traceId,
+            cwd: process.cwd(),
+            dataDir: deps.dataDir,
+            logger: deps.logger,
+            channelId: ctx.channelId,
+          });
+          return { content: execution.content, isError: execution.isError ?? false };
+        },
+        streamOpts: {
+          model: deps.executorModel,
+          systemPrompt,
+          tools: deps.executorToolDefs,
+          temperature: deps.executorTemperature,
+          maxTokens: deps.executorMaxTokens,
+        },
+        logger: deps.logger,
+        maxIterations: deps.executorMaxIterations,
+      });
+
+      return {
+        content: result.text || "Executor completed but produced no output.",
+        metadata: {
+          iterations: result.iterations,
+          toolCalls: result.toolCalls.length,
+          usage: result.totalUsage,
+        },
+      };
+    } catch (error: unknown) {
+      return {
+        content: `Executor failed: ${error instanceof Error ? error.message : String(error)}`,
+        isError: true,
+      };
+    }
+  },
+});
 
 const MAINTENANCE_PREFIX = "__maintenance__:";
 
@@ -595,6 +695,7 @@ const main = async (): Promise<void> => {
   let lastPromptHash = "";
 
   // ── Tools ────────────────────────────────────────────────────────────────
+  // Full registry — all tools registered here, mode determines which the LLM sees.
   const registry = new ToolRegistry({ logger });
   registry.register(createBashTool());
   registry.register(createReadTool());
@@ -609,7 +710,14 @@ const main = async (): Promise<void> => {
   registry.register(createMemoryIngestTool(memoryBackend));
   registry.register(createIdentityEvolveTool());
 
-  const toolDefs = registry.list().map(toolToDefinition);
+  // Tool defs are finalized after providers are set up (orchestrator mode needs buildGatewayForModel).
+  // Placeholder — populated below after provider setup.
+  let toolDefs: AgentLoopToolDef[] = [];
+  const isOrchestratorMode = config.agentMode === "orchestrator";
+  let orchestratorModel = "";
+  let orchestratorProvider = "";
+  let executorModel = "";
+  let executorProvider = "";
 
   // ── Providers ────────────────────────────────────────────────────────────
   const providers = buildProviders(config);
@@ -712,6 +820,64 @@ const main = async (): Promise<void> => {
       authProfiles,
     });
   };
+
+  // ── Finalize tool defs (after providers + gateway are ready) ───────────
+  if (isOrchestratorMode) {
+    const orchSpec = parseModelSpec(
+      config.orchestratorConfig.model,
+      config.routing.defaultProvider,
+    );
+    const execSpec = parseModelSpec(config.executorConfig.model, config.routing.defaultProvider);
+    orchestratorProvider = orchSpec.provider;
+    orchestratorModel = orchSpec.model;
+    executorProvider = execSpec.provider;
+    executorModel = execSpec.model;
+
+    if (!orchestratorModel || !executorModel) {
+      throw new Error(
+        "Orchestrator mode requires both [orchestrator].model and [executor].model to be set. " +
+          'Format: "provider/model" (e.g. "openrouter/glm-5:cloud")',
+      );
+    }
+
+    const executorToolNames = new Set(config.executorConfig.tools);
+    const executorTools = registry.list().filter((tool) => executorToolNames.has(tool.name));
+    const executorToolDefs = executorTools.map(toolToDefinition);
+    const executorGateway = buildGatewayForModel(executorProvider, executorModel);
+
+    const delegateTool = createDelegateTool({
+      executorGateway,
+      executorModel,
+      executorTools,
+      executorToolDefs,
+      executorTemperature: config.executorConfig.temperature,
+      executorMaxTokens: config.executorConfig.maxTokens,
+      executorMaxIterations: config.executorConfig.maxIterations,
+      registry,
+      logger,
+      dataDir: config.dataDir,
+    });
+    registry.register(delegateTool);
+
+    const orchestratorToolNames = new Set(config.orchestratorConfig.tools);
+    toolDefs = registry
+      .list()
+      .filter((tool) => orchestratorToolNames.has(tool.name))
+      .map(toolToDefinition);
+
+    logger.info(
+      {
+        mode: "orchestrator",
+        brain: `${orchestratorProvider}/${orchestratorModel}`,
+        hands: `${executorProvider}/${executorModel}`,
+        orchestratorTools: toolDefs.map((t) => t.name),
+        executorTools: executorToolDefs.map((t) => t.name),
+      },
+      "orchestrator/executor mode configured",
+    );
+  } else {
+    toolDefs = registry.list().map(toolToDefinition);
+  }
 
   // ── Channels ─────────────────────────────────────────────────────────────
   const channelAdapters: ChannelAdapter[] = [];
@@ -1003,14 +1169,24 @@ const main = async (): Promise<void> => {
       }
 
       const startedAt = Date.now();
-      const [requestedProvider, ...modelParts] = activePrimaryModel.split("/");
-      const activeProvider = providerDefaultModels.has(requestedProvider)
-        ? requestedProvider
-        : routing.defaultProvider;
-      const fallbackModel =
-        providerDefaultModels.get(activeProvider) ??
-        defaultModelForProvider(config, activeProvider);
-      const activeModel = modelParts.join("/") || fallbackModel;
+
+      // In orchestrator mode, always use the orchestrator's model (brain).
+      // In unified mode, use the active primary model (which can be switched via /model command).
+      let activeProvider: string;
+      let activeModel: string;
+      if (isOrchestratorMode) {
+        activeProvider = orchestratorProvider;
+        activeModel = orchestratorModel;
+      } else {
+        const [requestedProvider, ...modelParts] = activePrimaryModel.split("/");
+        activeProvider = providerDefaultModels.has(requestedProvider)
+          ? requestedProvider
+          : routing.defaultProvider;
+        const fallbackModel =
+          providerDefaultModels.get(activeProvider) ??
+          defaultModelForProvider(config, activeProvider);
+        activeModel = modelParts.join("/") || fallbackModel;
+      }
       const activeGateway = buildGatewayForModel(activeProvider, activeModel);
       let streamedText = "";
 
@@ -1038,7 +1214,8 @@ const main = async (): Promise<void> => {
           model: activeModel,
           systemPrompt,
           tools: toolDefs,
-          maxTokens: 4096,
+          temperature: isOrchestratorMode ? config.orchestratorConfig.temperature : undefined,
+          maxTokens: isOrchestratorMode ? config.orchestratorConfig.maxTokens : 4096,
           timeoutMs: config.resilience.requestTimeoutMs,
         },
         logger,
@@ -1260,7 +1437,13 @@ const main = async (): Promise<void> => {
   logger.info(
     {
       agentName: config.agentName,
-      model: activePrimaryModel,
+      mode: config.agentMode,
+      model: isOrchestratorMode
+        ? {
+            brain: `${orchestratorProvider}/${orchestratorModel}`,
+            hands: `${executorProvider}/${executorModel}`,
+          }
+        : activePrimaryModel,
       tools: toolDefs.map((tool) => tool.name),
       providers: providers.map((provider) => provider.name),
       channels: channelAdapters.map((channel) => channel.channelType),

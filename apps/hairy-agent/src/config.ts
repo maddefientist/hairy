@@ -66,12 +66,30 @@ interface ProviderRuntimeConfig {
   baseUrl?: string;
 }
 
+export interface OrchestratorModeConfig {
+  model: string; // "provider/model" e.g. "openrouter/glm-5:cloud"
+  tools: string[]; // tool names the orchestrator gets
+  temperature: number;
+  maxTokens: number;
+}
+
+export interface ExecutorModeConfig {
+  model: string; // "provider/model" e.g. "ollama/qwen3.5:9b"
+  tools: string[]; // tool names the executor gets
+  temperature: number;
+  maxTokens: number;
+  maxIterations: number;
+}
+
 export interface HairyClawRuntimeConfig {
   agentName: string;
   dataDir: string;
   healthPort: number;
   configDir: string;
   maxIterationsPerRun: number;
+  agentMode: "unified" | "orchestrator";
+  orchestratorConfig: OrchestratorModeConfig;
+  executorConfig: ExecutorModeConfig;
   providers: {
     anthropic: ProviderRuntimeConfig;
     openrouter: ProviderRuntimeConfig;
@@ -215,12 +233,32 @@ export const loadHairyClawConfig = async (): Promise<HairyClawRuntimeConfig> => 
     );
   }
 
+  const orchestratorModel = process.env.ORCHESTRATOR_MODEL ?? base.orchestrator.model ?? "";
+  const executorModel = process.env.EXECUTOR_MODEL ?? base.executor.model ?? "";
+
   return {
     agentName: base.agent.name,
     dataDir: base.agent.data_dir,
     healthPort: base.health.port,
     configDir,
     maxIterationsPerRun: base.agent.max_iterations_per_run,
+    agentMode:
+      (process.env.AGENT_MODE as "unified" | "orchestrator" | undefined) ??
+      base.agent.mode ??
+      "unified",
+    orchestratorConfig: {
+      model: orchestratorModel,
+      tools: base.orchestrator.tools,
+      temperature: base.orchestrator.temperature,
+      maxTokens: base.orchestrator.max_tokens,
+    },
+    executorConfig: {
+      model: executorModel,
+      tools: base.executor.tools,
+      temperature: base.executor.temperature,
+      maxTokens: base.executor.max_tokens,
+      maxIterations: base.executor.max_iterations,
+    },
     providers,
     routing: {
       defaultProvider: base.routing.default_provider,

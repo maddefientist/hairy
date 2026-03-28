@@ -83,12 +83,41 @@ const memorySchema = z.object({
   preload_max_chars: z.number().int().positive().default(2_000),
 });
 
+const orchestratorSchema = z.object({
+  model: z.string().default(""),
+  tools: z.array(z.string()).default(["delegate", "memory_recall", "memory_ingest"]),
+  temperature: z.number().min(0).max(2).default(0.7),
+  max_tokens: z.number().int().positive().default(4096),
+});
+
+const executorSchema = z.object({
+  model: z.string().default(""),
+  tools: z.array(z.string()).default(["bash", "read", "write", "edit", "web_search", "web_fetch"]),
+  temperature: z.number().min(0).max(2).default(0.1),
+  max_tokens: z.number().int().positive().default(4096),
+  max_iterations: z.number().int().positive().default(5),
+});
+
 const configSchema = z.object({
   agent: z.object({
     name: z.string().default("HairyClaw"),
     data_dir: z.string().default("./data"),
     max_iterations_per_run: z.number().int().positive().default(25),
     max_context_tokens: z.number().int().positive().default(100000),
+    mode: z.enum(["unified", "orchestrator"]).default("unified"),
+  }),
+  orchestrator: orchestratorSchema.default({
+    model: "",
+    tools: ["delegate", "memory_recall", "memory_ingest"],
+    temperature: 0.7,
+    max_tokens: 4096,
+  }),
+  executor: executorSchema.default({
+    model: "",
+    tools: ["bash", "read", "write", "edit", "web_search", "web_fetch"],
+    temperature: 0.1,
+    max_tokens: 4096,
+    max_iterations: 5,
   }),
   health: z.object({
     port: z.number().int().positive().default(9090),
