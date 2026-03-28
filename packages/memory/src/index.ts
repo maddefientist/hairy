@@ -4,5 +4,8 @@ export * from "./semantic.js";
 export * from "./episodic.js";
 export * from "./reflection.js";
 export * from "./preloader.js";
+export * from "./structured.js";
+export * from "./fact-extractor.js";
 export * from "./backends/local.js";
 export * from "./backends/hive.js";
+export * from "./uploads.js";

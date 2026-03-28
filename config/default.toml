@@ -79,6 +79,54 @@ preload_top_k = 3
 preload_min_score = 0.3
 preload_max_chars = 2000
 
+[memory.structured]
+enabled = true
+file_path = "./data/memory/structured.json"
+max_facts = 100
+confidence_threshold = 0.7
+max_injection_chars = 2000
+
+[plugins.summarization]
+enabled = true
+trigger_tokens = 80000
+keep_messages = 20
+max_tool_result_chars = 500
+
+[plugins.loop_detection]
+enabled = true
+warn_threshold = 3
+hard_limit = 5
+window_size = 20
+
+[mcp]
+enabled = false
+
+# Example MCP server configurations (uncomment to use):
+# [[mcp.servers]]
+# name = "filesystem"
+# enabled = true
+# transport = "stdio"
+# command = "npx"
+# args = ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"]
+# description = "Filesystem access via MCP"
+
+[subagent]
+max_concurrent = 3
+default_timeout_ms = 120000
+max_iterations = 10
+
+[uploads]
+enabled = true
+base_dir = "./data/uploads"
+max_file_size_mb = 50
+max_files_per_thread = 20
+convert_documents = true
+
+[sandbox]
+enabled = false
+provider = "local"  # "local" | "docker"
+base_dir = "./data/threads"
+
 [tools.bash]
 timeout_ms = 30000
 max_output_bytes = 1048576

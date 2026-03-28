@@ -10,3 +10,8 @@ export * from "./commands.js";
 export * from "./plugins/cost-guard.js";
 export * from "./plugins/trace-logger.js";
 export * from "./plugins/content-safety.js";
+export * from "./plugins/loop-detection.js";
+export * from "./plugins/guardrails.js";
+export * from "./plugins/summarization.js";
+export * from "./plugins/uploads.js";
+export * from "./subagent-executor.js";

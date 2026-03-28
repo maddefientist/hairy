@@ -22,7 +22,8 @@
       "@hairyclaw/channels": ["packages/channels/src/index.ts"],
       "@hairyclaw/tools": ["packages/tools/src/index.ts"],
       "@hairyclaw/memory": ["packages/memory/src/index.ts"],
-      "@hairyclaw/growth": ["packages/growth/src/index.ts"]
+      "@hairyclaw/growth": ["packages/growth/src/index.ts"],
+      "@hairyclaw/sandbox": ["packages/sandbox/src/index.ts"]
     }
   }
 }

@@ -45,12 +45,12 @@ export class ReflectionEngine {
       parts.push(`Slow run: ${durationSec}s — may need optimization or simpler approach.`);
     }
     if (responseLen < 20 && toolCount === 0) {
-      parts.push("Very short response with no tool use — may indicate confusion or lack of context.");
+      parts.push(
+        "Very short response with no tool use — may indicate confusion or lack of context.",
+      );
     }
     if (toolCount > 15) {
-      parts.push(
-        `Heavy tool usage (${toolCount} calls) — consider if approach was efficient.`,
-      );
+      parts.push(`Heavy tool usage (${toolCount} calls) — consider if approach was efficient.`);
     }
 
     // Skip trivial reflections (simple greetings, short exchanges)

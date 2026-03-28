@@ -206,7 +206,9 @@ export const loadConfig = async (configDir = "config"): Promise<HairyClawConfig>
 
   const envOverride: Record<string, unknown> = {
     health: {
-      port: process.env.HAIRYCLAW_HEALTH_PORT ? Number(process.env.HAIRYCLAW_HEALTH_PORT) : undefined,
+      port: process.env.HAIRYCLAW_HEALTH_PORT
+        ? Number(process.env.HAIRYCLAW_HEALTH_PORT)
+        : undefined,
     },
   };
 

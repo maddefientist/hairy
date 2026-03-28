@@ -24,11 +24,12 @@ Hairy is a reusable, autonomous, long-running agent framework. It runs as a pers
 ## Structure
 ```
 apps/hairy-agent/          — Main daemon entry point
-packages/core/             — Orchestrator, agent loop, task queue, scheduler
+packages/core/             — Orchestrator, agent loop, task queue, scheduler, plugins
 packages/providers/        — LLM provider gateway (Anthropic, Gemini, OpenRouter, Ollama)
 packages/channels/         — Channel adapters (Telegram, WhatsApp, webhook, CLI)
-packages/tools/            — Tool registry + built-in tools + sidecar protocol
-packages/memory/           — Conversation, semantic (pluggable), episodic memory
+packages/tools/            — Tool registry + built-in tools + sidecar protocol + MCP client
+packages/memory/           — Conversation, semantic, structured, episodic, uploads
+packages/sandbox/          — Sandboxed execution (local + Docker stub)
 packages/growth/           — Skill registry, prompt versioning, initiative engine
 packages/observability/    — Structured logging, metrics, tracing
 config/                    — Default TOML configuration
@@ -65,6 +66,15 @@ pnpm dev
 | Custom | Implement `MemoryBackend` | Your choice | Your choice |
 
 ## Recent Changes
+- 2026-03-28: DeerFlow-inspired upgrade — 8 new subsystems, 423 tests across 9 packages
+  - Loop detection plugin (warn at 3 repeats, hard stop at 5)
+  - Context summarization plugin (compress old messages when context too long)
+  - Parallel sub-agent executor (concurrent execution, semaphore, timeout enforcement)
+  - Sandbox package (virtual path mapping, local provider, Docker stub)
+  - Structured memory with fact extraction (categories, confidence, deduplication)
+  - Guardrail plugin (tool call policy enforcement, allowlist provider)
+  - MCP server integration (stdio transport, tool bridge, namespaced registration)
+  - File upload pipeline (document conversion, thread isolation, prompt injection)
 - 2026-02-28: Initial architecture, scaffold, agent loop, provider implementations
 - 2026-02-28: Memory backend abstraction (`MemoryBackend` interface, local + hive backends)
 - 2026-02-28: Added Google Gemini provider (native REST, tool calling)
@@ -72,9 +82,21 @@ pnpm dev
 - 2026-02-28: Renamed tools to backend-agnostic names (`memory_recall`, `memory_ingest`)
 - 2026-02-28: 121 tests across 13 test files, all passing
 
+## Plugins (packages/core/src/plugins/)
+| Plugin | Hook | Purpose |
+|--------|------|---------|
+| `loop-detection` | afterModel, onRunEnd | Detect and break repetitive tool call loops |
+| `summarization` | beforeModel | Compress old context when approaching token limit |
+| `guardrails` | beforeTool | Enforce tool call policies before execution |
+| `uploads` | beforeModel | Inject uploaded file list into system prompt |
+| `cost-guard` | beforeModel, onRunEnd | Daily spend tracking and budget enforcement |
+| `content-safety` | afterModel | Block secret leaks and unsafe content |
+| `trace-logger` | all hooks | Write JSONL trace logs per run |
+
 ## Next Steps
-- Streaming support for Ollama and Gemini providers
-- Additional memory backends (ChromaDB, SQLite+embeddings)
-- Docker compose for one-command deployment
+- Wire new plugins into main.ts startup (config-driven plugin loading)
+- Docker sandbox provider implementation
+- MCP SSE/HTTP transport (currently stdio only)
+- LLM-powered fact extraction (upgrade from rule-based)
 - CI pipeline (GitHub Actions)
 - Eval-driven skill auto-promotion

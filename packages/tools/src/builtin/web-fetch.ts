@@ -24,7 +24,8 @@ export const createWebFetchTool = (): Tool => ({
     try {
       const response = await fetch(input.url, {
         headers: {
-          "user-agent": "Mozilla/5.0 (compatible; HairyClaw/1.0; +https://github.com/maddefientist/hairyclaw)",
+          "user-agent":
+            "Mozilla/5.0 (compatible; HairyClaw/1.0; +https://github.com/maddefientist/hairyclaw)",
           accept:
             "text/html,application/xhtml+xml,application/xml;q=0.9,text/plain;q=0.8,*/*;q=0.7",
           "accept-language": "en-US,en;q=0.9",

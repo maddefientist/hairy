@@ -16,3 +16,8 @@ export * from "./builtin/identity-evolve.js";
 export * from "./sidecar/types.js";
 export * from "./sidecar/protocol.js";
 export * from "./sidecar/manager.js";
+export * from "./builtin/file-upload.js";
+export * from "./mcp/types.js";
+export * from "./mcp/stdio-transport.js";
+export * from "./mcp/client.js";
+export * from "./mcp/registry.js";

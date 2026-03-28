@@ -789,7 +789,11 @@ const main = async (): Promise<void> => {
   }
 
   // ── Onboarding ────────────────────────────────────────────────────────
-  const onboarding = createOnboardingManager({ dataDir: config.dataDir, logger, agentName: config.agentName });
+  const onboarding = createOnboardingManager({
+    dataDir: config.dataDir,
+    logger,
+    agentName: config.agentName,
+  });
 
   // ── Delivery queue ─────────────────────────────────────────────────────
   const deliveryQueue = new DeliveryQueue({
@@ -923,7 +927,11 @@ const main = async (): Promise<void> => {
       const senderJid = message.senderId || message.channelId;
       const pushName = message.senderName || senderJid.split("@")[0];
       const userProfile = await onboarding.getOrCreateProfile(senderJid, pushName);
-      const onboardingCtx = onboarding.getOnboardingPrompt(userProfile, message.content.text ?? "", message.channelType);
+      const onboardingCtx = onboarding.getOnboardingPrompt(
+        userProfile,
+        message.content.text ?? "",
+        message.channelType,
+      );
 
       const commandText = message.content.text ?? "";
       const commandResponse = await commandRouter.route(commandText, {

@@ -12,3 +12,14 @@ blocked_paths = ["/etc", "/usr", "~/.ssh", "~/.aws"]
 max_memory_mb = 512
 max_cpu_pct = 50
 network_access = false
+
+[guardrails]
+enabled = true
+fail_closed = true
+
+[guardrails.bash]
+blocked_commands = ["sudo", "rm -rf", "mkfs", "dd", "chmod 777"]
+blocked_patterns = ["curl.*\\|.*sh", "wget.*\\|.*bash"]
+
+[guardrails.file_ops]
+blocked_paths = ["/etc", "/usr", "/var", "~/.ssh", "~/.aws", "~/.config"]

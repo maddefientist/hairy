@@ -1,6 +1,7 @@
 import {
   type AgentLoopProvider,
   type AgentLoopResult,
+  type SubagentExecutor,
   type ToolExecutor,
   runAgentLoop,
 } from "@hairyclaw/core";
@@ -42,6 +43,10 @@ export interface SubAgentToolOptions {
   executor?: ToolExecutor;
   runLoop?: RunAgentLoopFn;
   logger?: HairyClawLogger;
+}
+
+export interface ParallelSubAgentToolOptions extends SubAgentToolOptions {
+  subagentExecutor?: SubagentExecutor;
 }
 
 const toToolDef = (
@@ -90,7 +95,7 @@ const createToolExecutor = (tools: Tool[], ctx: ToolContext): ToolExecutor => {
   };
 };
 
-export const createSubAgentTool = (opts: SubAgentToolOptions): Tool => ({
+export const createSubAgentTool = (opts: ParallelSubAgentToolOptions): Tool => ({
   name: opts.name,
   description: opts.description,
   parameters: subAgentArgsSchema,
@@ -98,22 +103,59 @@ export const createSubAgentTool = (opts: SubAgentToolOptions): Tool => ({
     const input = subAgentArgsSchema.parse(args);
     const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
     const tools = opts.tools ?? [];
+    const logger = opts.logger ?? ctx.logger ?? noopLogger;
 
-    if (!opts.provider && !opts.runLoop) {
+    if (!opts.provider && !opts.runLoop && !opts.subagentExecutor) {
       return {
         content: "sub-agent provider is missing",
         isError: true,
       };
     }
 
+    // Path 1: Use SubagentExecutor for parallel execution
+    if (opts.subagentExecutor) {
+      const provider = opts.provider ?? missingProvider;
+      const toolExecutor = opts.executor ?? createToolExecutor(tools, ctx);
+
+      try {
+        const taskId = await opts.subagentExecutor.submit({
+          task: input.task,
+          systemPrompt: opts.systemPrompt,
+          provider,
+          executor: toolExecutor,
+          tools: tools.map(toToolDef),
+          model: opts.model ?? "default",
+          parentTraceId: ctx.traceId,
+          logger,
+          timeoutMs,
+        });
+
+        const result = await opts.subagentExecutor.waitFor(taskId, timeoutMs);
+
+        if (result.status === "completed" && result.result !== undefined) {
+          return { content: result.result };
+        }
+
+        return {
+          content: result.error ?? `sub-agent ${result.status}`,
+          isError: true,
+        };
+      } catch (error: unknown) {
+        return {
+          content: error instanceof Error ? error.message : "sub-agent execution failed",
+          isError: true,
+        };
+      }
+    }
+
+    // Path 2: Direct synchronous execution (backward compat)
     const provider = opts.provider ?? missingProvider;
-    const executor = opts.executor ?? createToolExecutor(tools, ctx);
-    const logger = opts.logger ?? ctx.logger ?? noopLogger;
+    const toolExecutor = opts.executor ?? createToolExecutor(tools, ctx);
     const runLoop = opts.runLoop ?? runAgentLoop;
 
     const loopPromise = runLoop([{ role: "user", content: [{ type: "text", text: input.task }] }], {
       provider,
-      executor,
+      executor: toolExecutor,
       logger,
       maxIterations: opts.maxIterations,
       streamOpts: {

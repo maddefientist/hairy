@@ -1,4 +1,11 @@
-import type { AgentLoopOptions, AgentLoopResult } from "@hairyclaw/core";
+import type {
+  AgentLoopEvent,
+  AgentLoopMessage,
+  AgentLoopOptions,
+  AgentLoopResult,
+  AgentLoopStreamOptions,
+} from "@hairyclaw/core";
+import { SubagentExecutor } from "@hairyclaw/core";
 import { describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import { createSubAgentTool } from "../src/builtin/subagent.js";
@@ -124,7 +131,7 @@ describe("createSubAgentTool", () => {
     };
 
     const runLoop = vi.fn(
-      async (_messages, options: AgentLoopOptions): Promise<AgentLoopResult> => {
+      async (_messages: unknown, options: AgentLoopOptions): Promise<AgentLoopResult> => {
         const execution = await options.executor("echo", { value: "nested" }, "call-1");
         return {
           ...baseResult,
@@ -158,5 +165,93 @@ describe("createSubAgentTool", () => {
 
     expect(result.isError).toBe(true);
     expect(result.content).toContain("provider is missing");
+  });
+});
+
+describe("createSubAgentTool with SubagentExecutor", () => {
+  const mockProvider = (text: string, delayMs = 0) => ({
+    async *stream(
+      _msgs: AgentLoopMessage[],
+      _opts: AgentLoopStreamOptions,
+    ): AsyncIterable<AgentLoopEvent> {
+      if (delayMs > 0) {
+        await new Promise((resolve) => setTimeout(resolve, delayMs));
+      }
+      yield { type: "text_delta" as const, text };
+      yield { type: "stop" as const, reason: "end" };
+    },
+  });
+
+  it("uses executor for parallel execution", async () => {
+    const executor = new SubagentExecutor({ maxConcurrent: 3 });
+
+    const tool = createSubAgentTool({
+      name: "parallel-sub",
+      description: "parallel desc",
+      systemPrompt: "You help.",
+      provider: mockProvider("executor result"),
+      subagentExecutor: executor,
+    });
+
+    const result = await tool.execute({ task: "work" }, toolCtx());
+
+    expect(result.isError).toBeFalsy();
+    expect(result.content).toBe("executor result");
+  });
+
+  it("returns error status from executor on failure", async () => {
+    const failingRunLoop = vi.fn(async () => {
+      throw new Error("provider crashed");
+    });
+
+    const executor = new SubagentExecutor({ maxConcurrent: 3, runLoop: failingRunLoop });
+
+    const tool = createSubAgentTool({
+      name: "failing-sub",
+      description: "fails",
+      systemPrompt: "sys",
+      provider: mockProvider("unused"),
+      subagentExecutor: executor,
+    });
+
+    const result = await tool.execute({ task: "crash" }, toolCtx());
+
+    expect(result.isError).toBe(true);
+    expect(result.content).toContain("provider crashed");
+  });
+
+  it("executor timeout results in error", async () => {
+    const executor = new SubagentExecutor({ maxConcurrent: 3 });
+
+    const tool = createSubAgentTool({
+      name: "slow-sub",
+      description: "slow",
+      systemPrompt: "sys",
+      provider: mockProvider("slow", 200),
+      timeoutMs: 30,
+      subagentExecutor: executor,
+    });
+
+    const result = await tool.execute({ task: "slow work" }, toolCtx());
+
+    expect(result.isError).toBe(true);
+    expect(result.content).toContain("timed out");
+  });
+
+  it("backward compat: works without executor (uses runLoop)", async () => {
+    const runLoop = vi.fn(async () => ({ ...baseResult, text: "sync result" }));
+
+    const tool = createSubAgentTool({
+      name: "sync-sub",
+      description: "sync desc",
+      systemPrompt: "sys",
+      runLoop,
+    });
+
+    const result = await tool.execute({ task: "sync work" }, toolCtx());
+
+    expect(result.isError).toBeFalsy();
+    expect(result.content).toBe("sync result");
+    expect(runLoop).toHaveBeenCalledTimes(1);
   });
 });

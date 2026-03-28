@@ -60,7 +60,10 @@ export class PluginRunner {
     this.plugins = [...plugins].sort((left, right) => pluginPriority(left) - pluginPriority(right));
   }
 
-  async runOnUserMessage(msg: HairyClawMessage, ctx: PluginContext): Promise<HairyClawMessage | null> {
+  async runOnUserMessage(
+    msg: HairyClawMessage,
+    ctx: PluginContext,
+  ): Promise<HairyClawMessage | null> {
     let current: HairyClawMessage | null = msg;
 
     for (const plugin of this.plugins) {
@@ -70,12 +73,13 @@ export class PluginRunner {
 
       const hook = plugin.onUserMessage;
       const currentMessage: HairyClawMessage = current;
-      const next: HairyClawMessage | null | undefined = await this.safeHook<HairyClawMessage | null>(
-        plugin,
-        "onUserMessage",
-        () => hook(currentMessage, ctx),
-        ctx,
-      );
+      const next: HairyClawMessage | null | undefined =
+        await this.safeHook<HairyClawMessage | null>(
+          plugin,
+          "onUserMessage",
+          () => hook(currentMessage, ctx),
+          ctx,
+        );
 
       if (next === null) {
         return null;

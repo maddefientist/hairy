@@ -76,7 +76,9 @@ export class SidecarManager {
       } catch (error: unknown) {
         // Only warn if manifest.json exists but is invalid — skip silently if missing
         const isNotFound =
-          error instanceof Error && "code" in error && (error as { code: string }).code === "ENOENT";
+          error instanceof Error &&
+          "code" in error &&
+          (error as { code: string }).code === "ENOENT";
         if (!isNotFound) {
           this.opts.logger.warn(
             { err: error, sidecarDir: dir },
