@@ -25,6 +25,14 @@ export interface CommandContext {
   runtime: CommandRuntime;
 }
 
+export interface UpdateResult {
+  success: boolean;
+  previousVersion: string;
+  currentVersion: string;
+  changes: string;
+  error?: string;
+}
+
 export interface CommandRuntime {
   getModelInfo(): { primary: string; fallbacks: string[] };
   setPrimaryModel?: (model: string) => boolean;
@@ -33,6 +41,8 @@ export interface CommandRuntime {
   getUptime(): number;
   getMetrics(): Record<string, number>;
   getQueueStats(): { pending: number; deadLetters: number };
+  getVersion?: () => string;
+  selfUpdate?: () => Promise<UpdateResult>;
 }
 
 const noopLogger: HairyClawLogger = {
@@ -222,6 +232,52 @@ export class CommandRouter {
       handler: async (_args, ctx) => {
         const queue = ctx.runtime.getQueueStats();
         return `Queue pending=${queue.pending}, deadLetters=${queue.deadLetters}`;
+      },
+    });
+
+    this.register({
+      name: "version",
+      aliases: ["v"],
+      description: "Show current version/commit",
+      exclusive: true,
+      handler: async (_args, ctx) => {
+        if (!ctx.runtime.getVersion) {
+          return "Version info not available.";
+        }
+        return ctx.runtime.getVersion();
+      },
+    });
+
+    this.register({
+      name: "update",
+      aliases: ["upgrade"],
+      description: "Self-update: pull latest code, rebuild, and restart",
+      exclusive: true,
+      handler: async (_args, ctx) => {
+        if (!ctx.runtime.selfUpdate) {
+          return "Self-update is not enabled in this runtime.";
+        }
+
+        const result = await ctx.runtime.selfUpdate();
+        if (!result.success) {
+          return [
+            "❌ Update failed",
+            `Error: ${result.error ?? "unknown"}`,
+            `Version: ${result.previousVersion} (unchanged)`,
+          ].join("\n");
+        }
+
+        if (result.previousVersion === result.currentVersion) {
+          return `✅ Already up to date (${result.currentVersion})`;
+        }
+
+        return [
+          "✅ Update successful — restarting...",
+          `${result.previousVersion} → ${result.currentVersion}`,
+          result.changes ? `\nChanges:\n${result.changes}` : "",
+        ]
+          .filter(Boolean)
+          .join("\n");
       },
     });
   }

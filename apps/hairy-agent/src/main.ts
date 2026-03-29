@@ -1,3 +1,4 @@
+import { execSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -1127,6 +1128,62 @@ const main = async (): Promise<void> => {
     getUptime: () => process.uptime(),
     getMetrics: metricSnapshot,
     getQueueStats: () => deliveryQueue.stats(),
+    getVersion: () => {
+      try {
+        const subject = String(execSync("git log --oneline -1", { cwd: process.cwd() })).trim();
+        const branch = String(execSync("git branch --show-current", { cwd: process.cwd() })).trim();
+        return `${subject} (${branch})`;
+      } catch {
+        return "version unknown (not a git repo)";
+      }
+    },
+    selfUpdate: async () => {
+      try {
+        const output = String(
+          execSync("bash deploy/update.sh true", {
+            cwd: process.cwd(),
+            timeout: 120_000,
+            env: { ...process.env, PATH: process.env.PATH },
+          }),
+        ).trim();
+
+        // Parse the last line as JSON
+        const lines = output.split("\n");
+        const jsonLine = lines[lines.length - 1] ?? "{}";
+        const result = JSON.parse(jsonLine) as {
+          success: boolean;
+          previousVersion: string;
+          currentVersion: string;
+          changes: string;
+          error?: string;
+        };
+
+        return {
+          success: result.success,
+          previousVersion: result.previousVersion,
+          currentVersion: result.currentVersion,
+          changes: result.changes,
+          error: result.error,
+        };
+      } catch (error: unknown) {
+        const msg = error instanceof Error ? error.message : String(error);
+        let prevVersion = "unknown";
+        try {
+          prevVersion = String(
+            execSync("git rev-parse --short HEAD", { cwd: process.cwd() }),
+          ).trim();
+        } catch {
+          // ignore
+        }
+        return {
+          success: false,
+          previousVersion: prevVersion,
+          currentVersion: prevVersion,
+          changes: "",
+          error: msg,
+        };
+      }
+    },
   };
 
   // ── Orchestrator ─────────────────────────────────────────────────────────
