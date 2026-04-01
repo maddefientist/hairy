@@ -63,6 +63,19 @@ const toolsSchema = z.object({
     .default({ auto_build: true, health_check_interval_ms: 30000 }),
 });
 
+const featuresSchema = z.object({
+  execution_metadata_tracking: z.boolean().optional(),
+  standardized_telemetry: z.boolean().optional(),
+  denial_tracking: z.boolean().optional(),
+  subagent_context_forking: z.boolean().optional(),
+  verification_worker: z.boolean().optional(),
+  session_memory_extraction: z.boolean().optional(),
+  typed_memory: z.boolean().optional(),
+  shared_artifacts: z.boolean().optional(),
+  deferred_tool_loading: z.boolean().optional(),
+  remote_execution: z.boolean().optional(),
+});
+
 const resilienceSchema = z.object({
   cooldown_base_ms: z.number().int().positive().default(15_000),
   cooldown_max_ms: z.number().int().positive().default(300_000),
@@ -185,6 +198,7 @@ const configSchema = z.object({
     bash: { timeout_ms: 30000, max_output_bytes: 1_048_576 },
     sidecar: { auto_build: true, health_check_interval_ms: 30000 },
   }),
+  features: featuresSchema.default({}),
 });
 
 export type HairyClawConfig = z.infer<typeof configSchema>;

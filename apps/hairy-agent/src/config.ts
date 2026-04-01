@@ -154,6 +154,18 @@ export interface HairyClawRuntimeConfig {
   tools: {
     sidecarAutoBuild: boolean;
   };
+  features: {
+    executionMetadataTracking: boolean;
+    standardizedTelemetry: boolean;
+    denialTracking: boolean;
+    subagentContextForking: boolean;
+    verificationWorker: boolean;
+    sessionMemoryExtraction: boolean;
+    typedMemory: boolean;
+    sharedArtifacts: boolean;
+    deferredToolLoading: boolean;
+    remoteExecution: boolean;
+  };
 }
 
 export const loadHairyClawConfig = async (): Promise<HairyClawRuntimeConfig> => {
@@ -331,6 +343,46 @@ export const loadHairyClawConfig = async (): Promise<HairyClawRuntimeConfig> => 
     },
     tools: {
       sidecarAutoBuild: base.tools.sidecar.auto_build,
+    },
+    features: {
+      executionMetadataTracking:
+        parseBooleanEnv(process.env.FEATURE_EXECUTION_METADATA_TRACKING) ??
+        base.features?.execution_metadata_tracking ??
+        true,
+      standardizedTelemetry:
+        parseBooleanEnv(process.env.FEATURE_STANDARDIZED_TELEMETRY) ??
+        base.features?.standardized_telemetry ??
+        true,
+      denialTracking:
+        parseBooleanEnv(process.env.FEATURE_DENIAL_TRACKING) ??
+        base.features?.denial_tracking ??
+        false,
+      subagentContextForking:
+        parseBooleanEnv(process.env.FEATURE_SUBAGENT_CONTEXT_FORKING) ??
+        base.features?.subagent_context_forking ??
+        false,
+      verificationWorker:
+        parseBooleanEnv(process.env.FEATURE_VERIFICATION_WORKER) ??
+        base.features?.verification_worker ??
+        false,
+      sessionMemoryExtraction:
+        parseBooleanEnv(process.env.FEATURE_SESSION_MEMORY_EXTRACTION) ??
+        base.features?.session_memory_extraction ??
+        false,
+      typedMemory:
+        parseBooleanEnv(process.env.FEATURE_TYPED_MEMORY) ?? base.features?.typed_memory ?? false,
+      sharedArtifacts:
+        parseBooleanEnv(process.env.FEATURE_SHARED_ARTIFACTS) ??
+        base.features?.shared_artifacts ??
+        false,
+      deferredToolLoading:
+        parseBooleanEnv(process.env.FEATURE_DEFERRED_TOOL_LOADING) ??
+        base.features?.deferred_tool_loading ??
+        false,
+      remoteExecution:
+        parseBooleanEnv(process.env.FEATURE_REMOTE_EXECUTION) ??
+        base.features?.remote_execution ??
+        false,
     },
   };
 };

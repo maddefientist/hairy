@@ -15,3 +15,6 @@ export * from "./plugins/guardrails.js";
 export * from "./plugins/summarization.js";
 export * from "./plugins/uploads.js";
 export * from "./subagent-executor.js";
+export * from "./feature-flags.js";
+export * from "./execution-metadata.js";
+export * from "./telemetry-events.js";
