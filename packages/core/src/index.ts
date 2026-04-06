@@ -18,3 +18,5 @@ export * from "./subagent-executor.js";
 export * from "./feature-flags.js";
 export * from "./execution-metadata.js";
 export * from "./telemetry-events.js";
+export * from "./verification-worker.js";
+export * from "./agent-snapshot.js";

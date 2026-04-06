@@ -1,6 +1,12 @@
 import { randomUUID } from "node:crypto";
 import { type HairyClawLogger, type Metrics, createTrace } from "@hairyclaw/observability";
 import {
+  type AgentSnapshot,
+  type RestoredAgentState,
+  createAgentSnapshot,
+  restoreFromSnapshot,
+} from "./agent-snapshot.js";
+import {
   type ExecutionMetadata,
   createExecutionMetadata,
   endExecutionMetadata,
@@ -42,6 +48,7 @@ const emptyUsage = (): TokenUsage => ({
 export class Orchestrator {
   private processing = false;
   private started = false;
+  private snapshots = new Map<string, AgentSnapshot>();
 
   constructor(private readonly deps: OrchestratorDeps) {}
 
@@ -69,6 +76,76 @@ export class Orchestrator {
     await this.deps.queue.enqueue(item, "user");
     this.deps.metrics.increment("messages_in");
     await this.processLoop();
+  }
+
+  /**
+   * Create a snapshot of the current orchestrator state for a given trace.
+   * Captures execution metadata, tools, artifacts, and a summary for handoff.
+   */
+  createSnapshot(opts: {
+    traceId: string;
+    messagesSummary: string;
+    activeTools?: string[];
+    executionMetadata?: ExecutionMetadata;
+    artifacts?: AgentSnapshot["artifacts"];
+    state?: Record<string, unknown>;
+  }): AgentSnapshot {
+    const snapshot = createAgentSnapshot({
+      agentId: "orchestrator",
+      traceId: opts.traceId,
+      messagesSummary: opts.messagesSummary,
+      activeTools: opts.activeTools,
+      executionMetadata: opts.executionMetadata,
+      artifacts: opts.artifacts,
+      state: opts.state,
+    });
+
+    this.snapshots.set(snapshot.snapshotId, snapshot);
+    this.deps.logger.info(
+      { snapshotId: snapshot.snapshotId, traceId: opts.traceId },
+      "agent snapshot created",
+    );
+    return snapshot;
+  }
+
+  /**
+   * Restore agent state from a snapshot ID.
+   * Returns the restored state or undefined if snapshot not found.
+   */
+  restoreSnapshot(snapshotId: string): RestoredAgentState | undefined {
+    const snapshot = this.snapshots.get(snapshotId);
+    if (!snapshot) {
+      this.deps.logger.warn({ snapshotId }, "snapshot not found for restoration");
+      return undefined;
+    }
+
+    const restored = restoreFromSnapshot(snapshot);
+    this.deps.logger.info(
+      { snapshotId, agentId: snapshot.agentId, traceId: snapshot.traceId },
+      "agent snapshot restored",
+    );
+    return restored;
+  }
+
+  /**
+   * Get a stored snapshot by ID
+   */
+  getSnapshot(snapshotId: string): AgentSnapshot | undefined {
+    return this.snapshots.get(snapshotId);
+  }
+
+  /**
+   * List all stored snapshots
+   */
+  listSnapshots(): AgentSnapshot[] {
+    return Array.from(this.snapshots.values());
+  }
+
+  /**
+   * Remove a snapshot by ID
+   */
+  deleteSnapshot(snapshotId: string): boolean {
+    return this.snapshots.delete(snapshotId);
   }
 
   private async processLoop(): Promise<void> {

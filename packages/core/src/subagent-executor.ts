@@ -55,6 +55,13 @@ export interface SubagentConfig {
   featureFlags?: FeatureFlagManager;
 }
 
+/**
+ * Subagent context mode:
+ * - 'fork': inherit parent context/messages, child ExecutionMetadata carries full parent lineage
+ * - 'fresh': clean slate with only the task description, independent metadata with parent trace reference
+ */
+export type SubagentContextMode = "fork" | "fresh";
+
 export interface SubagentSubmitOptions {
   taskId?: string;
   task: string;
@@ -68,6 +75,14 @@ export interface SubagentSubmitOptions {
   timeoutMs?: number;
   /** Parent execution metadata for lineage tracking */
   parentMetadata?: ExecutionMetadata;
+  /**
+   * Context mode: 'fork' inherits parent messages, 'fresh' starts clean.
+   * Defaults to 'fresh' for backward compatibility.
+   * Requires subagentContextForking feature flag to be enabled; falls back to 'fresh' when disabled.
+   */
+  mode?: SubagentContextMode;
+  /** Parent messages to inherit in 'fork' mode. Ignored in 'fresh' mode. */
+  parentMessages?: AgentLoopMessage[];
 }
 
 /** Simple counting semaphore for concurrency control */
@@ -222,6 +237,40 @@ export class SubagentExecutor {
     return count;
   }
 
+  /**
+   * Resolve the effective context mode, respecting feature flags.
+   * Returns 'fresh' if subagentContextForking is disabled or no mode specified.
+   */
+  private resolveContextMode(requestedMode?: SubagentContextMode): SubagentContextMode {
+    if (!requestedMode || requestedMode === "fresh") {
+      return "fresh";
+    }
+    // Fork mode requires feature flag
+    if (this.featureFlags?.isDisabled("subagentContextForking")) {
+      return "fresh";
+    }
+    return "fork";
+  }
+
+  /**
+   * Build the initial messages for the subagent based on context mode.
+   * - 'fresh': single user message with task description only
+   * - 'fork': parent messages + task appended as new user message
+   */
+  private buildInitialMessages(
+    opts: SubagentSubmitOptions,
+    mode: SubagentContextMode,
+  ): AgentLoopMessage[] {
+    if (mode === "fork" && opts.parentMessages && opts.parentMessages.length > 0) {
+      return [
+        ...opts.parentMessages,
+        { role: "user", content: [{ type: "text", text: opts.task }] },
+      ];
+    }
+    // Fresh mode: clean slate
+    return [{ role: "user", content: [{ type: "text", text: opts.task }] }];
+  }
+
   private async executeTask(
     taskId: string,
     opts: SubagentSubmitOptions,
@@ -232,8 +281,10 @@ export class SubagentExecutor {
       throw new Error(`task not found: ${taskId}`);
     }
 
+    const effectiveMode = this.resolveContextMode(opts.mode);
+
     // Create child execution metadata if parent provided and feature enabled
-    const childMetadata = this.createChildMetadata(opts, taskId);
+    const childMetadata = this.createChildMetadata(opts, taskId, effectiveMode);
 
     await this.semaphore.acquire();
 
@@ -247,23 +298,23 @@ export class SubagentExecutor {
       task: opts.task,
       model: opts.model,
       timeoutMs,
+      contextMode: effectiveMode,
     });
 
     try {
-      const loopPromise = this.runLoop(
-        [{ role: "user", content: [{ type: "text", text: opts.task }] }],
-        {
-          provider: opts.provider,
-          executor: opts.executor,
-          logger: opts.logger,
-          maxIterations: this.config.maxIterations,
-          streamOpts: {
-            model: opts.model,
-            systemPrompt: opts.systemPrompt,
-            tools: opts.tools,
-          },
+      const initialMessages = this.buildInitialMessages(opts, effectiveMode);
+
+      const loopPromise = this.runLoop(initialMessages, {
+        provider: opts.provider,
+        executor: opts.executor,
+        logger: opts.logger,
+        maxIterations: this.config.maxIterations,
+        streamOpts: {
+          model: opts.model,
+          systemPrompt: opts.systemPrompt,
+          tools: opts.tools,
         },
-      );
+      });
 
       const agentResult: AgentLoopResult = await withTimeout(loopPromise, timeoutMs);
 
@@ -319,10 +370,14 @@ export class SubagentExecutor {
   /**
    * Create child execution metadata from parent when feature flag is enabled.
    * Returns undefined when executionMetadataTracking is disabled or no parent metadata.
+   *
+   * In 'fork' mode: full parent lineage with isForked=true tag
+   * In 'fresh' mode: independent metadata with parentTraceRef tag pointing back
    */
   private createChildMetadata(
     opts: SubagentSubmitOptions,
     taskId: string,
+    mode: SubagentContextMode = "fresh",
   ): ExecutionMetadata | undefined {
     if (this.featureFlags?.isDisabled("executionMetadataTracking")) {
       return undefined;
@@ -330,8 +385,18 @@ export class SubagentExecutor {
     if (!opts.parentMetadata) {
       return undefined;
     }
-    const child = createChildExecutionMetadata(opts.parentMetadata, taskId, "subagent");
-    return child;
+
+    if (mode === "fork") {
+      // Fork: child inherits parent's trace and full lineage
+      const child = createChildExecutionMetadata(opts.parentMetadata, taskId, "subagent");
+      child.tags = { ...child.tags, contextMode: "fork" };
+      return child;
+    }
+
+    // Fresh: independent metadata with reference back to parent trace
+    const fresh = createChildExecutionMetadata(opts.parentMetadata, taskId, "subagent");
+    fresh.tags = { ...fresh.tags, contextMode: "fresh", isForked: false };
+    return fresh;
   }
 
   /**
