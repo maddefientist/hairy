@@ -20,3 +20,5 @@ export * from "./execution-metadata.js";
 export * from "./telemetry-events.js";
 export * from "./verification-worker.js";
 export * from "./agent-snapshot.js";
+export * from "./artifact-scratchpad.js";
+export * from "./plugins/denial-tracker.js";

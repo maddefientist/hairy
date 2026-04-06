@@ -134,6 +134,24 @@ export const TELEMETRY_EVENTS = {
     timeout: "verification.timeout",
   },
 
+  // Artifacts
+  artifact: {
+    /** Artifact stored in scratchpad */
+    put: "artifact.put",
+    /** Artifact retrieved from scratchpad */
+    get: "artifact.get",
+    /** Artifact deleted from scratchpad */
+    delete: "artifact.delete",
+  },
+
+  // Denial tracking
+  denial: {
+    /** Denial tracked by denial tracker */
+    tracked: "policy.denial.tracked",
+    /** Denial pattern detected (N denials of same pattern) */
+    patternDetected: "policy.denial.pattern_detected",
+  },
+
   // Session/Lifecycle
   session: {
     /** Session started */

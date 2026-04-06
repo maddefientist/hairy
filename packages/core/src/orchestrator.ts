@@ -7,6 +7,11 @@ import {
   restoreFromSnapshot,
 } from "./agent-snapshot.js";
 import {
+  type ArtifactMetadata,
+  type ArtifactScratchpad,
+  createArtifactScratchpad,
+} from "./artifact-scratchpad.js";
+import {
   type ExecutionMetadata,
   createExecutionMetadata,
   endExecutionMetadata,
@@ -49,8 +54,70 @@ export class Orchestrator {
   private processing = false;
   private started = false;
   private snapshots = new Map<string, AgentSnapshot>();
+  private scratchpads = new Map<string, ArtifactScratchpad>();
 
   constructor(private readonly deps: OrchestratorDeps) {}
+
+  /**
+   * Get or create a scratchpad for a given trace/task.
+   * Gated behind the sharedArtifacts feature flag.
+   * Returns undefined when the flag is disabled.
+   */
+  getScratchpad(traceId: string): ArtifactScratchpad | undefined {
+    if (this.deps.featureFlags?.isDisabled("sharedArtifacts")) {
+      return undefined;
+    }
+    let pad = this.scratchpads.get(traceId);
+    if (!pad) {
+      pad = createArtifactScratchpad();
+      this.scratchpads.set(traceId, pad);
+      this.deps.logger.debug({ traceId }, "artifact scratchpad created for task");
+    }
+    return pad;
+  }
+
+  /**
+   * Put an artifact on the scratchpad for a given trace, with telemetry.
+   * Returns false if shared artifacts are disabled.
+   */
+  putArtifact(traceId: string, key: string, value: unknown, metadata: ArtifactMetadata): boolean {
+    const pad = this.getScratchpad(traceId);
+    if (!pad) {
+      return false;
+    }
+    pad.put(key, value, metadata);
+    this.emitTelemetry(TELEMETRY_EVENTS.artifact.put, undefined, {
+      traceId,
+      key,
+      producedBy: metadata.producedBy,
+      type: metadata.type,
+    });
+    return true;
+  }
+
+  /**
+   * Get an artifact from the scratchpad for a given trace, with telemetry.
+   */
+  getArtifact(traceId: string, key: string): unknown | undefined {
+    const pad = this.getScratchpad(traceId);
+    if (!pad) {
+      return undefined;
+    }
+    const entry = pad.get(key);
+    this.emitTelemetry(TELEMETRY_EVENTS.artifact.get, undefined, {
+      traceId,
+      key,
+      found: entry !== undefined,
+    });
+    return entry?.value;
+  }
+
+  /**
+   * Delete a scratchpad for a trace (cleanup after task completion).
+   */
+  deleteScratchpad(traceId: string): boolean {
+    return this.scratchpads.delete(traceId);
+  }
 
   async start(): Promise<void> {
     if (this.started) {
