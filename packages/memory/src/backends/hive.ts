@@ -6,7 +6,14 @@
  * Falls back gracefully — returns empty results on network error, never throws.
  */
 import { randomUUID } from "node:crypto";
-import type { MemoryBackend, SearchResult } from "../types.js";
+import type {
+  MemoryBackend,
+  MemoryType,
+  SearchOptions,
+  SearchResult,
+  StoreOptions,
+  VerificationMeta,
+} from "../types.js";
 
 export interface HiveBackendOptions {
   /** Root URL of the hive API (e.g. http://localhost:8088) */
@@ -35,6 +42,37 @@ const buildHeaders = (apiKey?: string): Record<string, string> => {
   return headers;
 };
 
+const VALID_MEMORY_TYPES = new Set<string>([
+  "fact",
+  "decision",
+  "preference",
+  "skill",
+  "reference",
+  "correction",
+  "session_summary",
+]);
+
+const parseMemoryType = (raw: unknown): MemoryType | undefined => {
+  if (typeof raw === "string" && VALID_MEMORY_TYPES.has(raw)) return raw as MemoryType;
+  return undefined;
+};
+
+const parseVerificationMeta = (i: Record<string, unknown>): VerificationMeta | undefined => {
+  const lastVerifiedAt = typeof i.last_verified_at === "string" ? i.last_verified_at : undefined;
+  const stalenessScore = typeof i.staleness_score === "number" ? i.staleness_score : undefined;
+  const extractionSource =
+    typeof i.extraction_source === "string" ? i.extraction_source : undefined;
+
+  if (
+    lastVerifiedAt === undefined &&
+    stalenessScore === undefined &&
+    extractionSource === undefined
+  ) {
+    return undefined;
+  }
+  return { lastVerifiedAt, stalenessScore, extractionSource };
+};
+
 const parseSearchItems = (payload: unknown): SearchResult[] => {
   if (typeof payload !== "object" || payload === null) return [];
 
@@ -47,18 +85,34 @@ const parseSearchItems = (payload: unknown): SearchResult[] => {
 
   return items
     .filter((i): i is Record<string, unknown> => typeof i === "object" && i !== null)
-    .map((i) => ({
-      id: typeof i.id === "string" ? i.id : randomUUID(),
-      content: typeof i.content === "string" ? i.content : "",
-      tags: Array.isArray(i.tags) ? i.tags.filter((t): t is string => typeof t === "string") : [],
-      createdAt:
-        typeof i.createdAt === "string"
-          ? i.createdAt
-          : typeof i.created_at === "string"
-            ? i.created_at
-            : new Date().toISOString(),
-      score: typeof i.score === "number" ? i.score : 0,
-    }))
+    .map((i) => {
+      const result: SearchResult = {
+        id: typeof i.id === "string" ? i.id : randomUUID(),
+        content:
+          typeof i.content === "string"
+            ? i.content
+            : typeof i.snippet === "string"
+              ? i.snippet
+              : "",
+        tags: Array.isArray(i.tags) ? i.tags.filter((t): t is string => typeof t === "string") : [],
+        createdAt:
+          typeof i.createdAt === "string"
+            ? i.createdAt
+            : typeof i.created_at === "string"
+              ? i.created_at
+              : new Date().toISOString(),
+        score: typeof i.score === "number" ? i.score : 0,
+      };
+
+      // Typed memory metadata (populated by hive instances with TYPED_MEMORY_ENABLED)
+      const memType = parseMemoryType(i.memory_type);
+      if (memType) result.memoryType = memType;
+
+      const verification = parseVerificationMeta(i);
+      if (verification) result.verification = verification;
+
+      return result;
+    })
     .filter((i) => i.content.length > 0);
 };
 
@@ -72,9 +126,22 @@ export class HiveMemoryBackend implements MemoryBackend {
     this.opts = opts;
   }
 
-  async store(content: string, tags: string[] = []): Promise<string> {
+  async store(content: string, tags: string[] = [], options?: StoreOptions): Promise<string> {
     const writeKey = this.opts.writeApiKey ?? this.opts.apiKey;
     const ns = this.opts.writeNamespace ?? this.opts.namespace ?? "default";
+
+    // Build the knowledge item payload, adding typed memory fields when present
+    const knowledgeItem: Record<string, unknown> = {
+      content,
+      tags,
+      source: "hairyclaw-memory",
+    };
+    if (options?.memoryType) {
+      knowledgeItem.memory_type = options.memoryType;
+    }
+    if (options?.extractionSource) {
+      knowledgeItem.extraction_source = options.extractionSource;
+    }
 
     // Try modern /ingest endpoint first
     try {
@@ -83,7 +150,7 @@ export class HiveMemoryBackend implements MemoryBackend {
         headers: buildHeaders(writeKey),
         body: JSON.stringify({
           namespace: ns,
-          knowledge_items: [{ content, tags, source: "hairyclaw-memory" }],
+          knowledge_items: [knowledgeItem],
         }),
       });
       if (res.ok) {
@@ -131,7 +198,7 @@ export class HiveMemoryBackend implements MemoryBackend {
     throw new Error("hive store: all endpoints unreachable");
   }
 
-  async search(query: string, topK = 5): Promise<SearchResult[]> {
+  async search(query: string, topK = 5, options?: SearchOptions): Promise<SearchResult[]> {
     const readKey = this.opts.readApiKey ?? this.opts.apiKey;
     const defaultNs = this.opts.writeNamespace ?? this.opts.namespace ?? "default";
     const namespaces =
@@ -140,7 +207,7 @@ export class HiveMemoryBackend implements MemoryBackend {
         : [defaultNs];
 
     const perNs = await Promise.all(
-      namespaces.map((ns) => this.recallNamespace(ns, query, topK, readKey)),
+      namespaces.map((ns) => this.recallNamespace(ns, query, topK, readKey, options)),
     );
 
     return perNs
@@ -169,6 +236,7 @@ export class HiveMemoryBackend implements MemoryBackend {
     query: string,
     topK: number,
     apiKey?: string,
+    options?: SearchOptions,
   ): Promise<SearchResult[]> {
     const modernBody: Record<string, unknown> = {
       namespace,
@@ -177,6 +245,10 @@ export class HiveMemoryBackend implements MemoryBackend {
       top_k: topK,
     };
     if (this.opts.device) modernBody.agent_key = this.opts.device;
+
+    // Typed memory filters — ignored by hive instances without TYPED_MEMORY_ENABLED
+    if (options?.memoryType) modernBody.memory_type = options.memoryType;
+    if (options?.maxStaleness !== undefined) modernBody.max_staleness = options.maxStaleness;
 
     // Modern: /recall
     try {

@@ -10,7 +10,7 @@ import { type HiveBackendOptions, HiveMemoryBackend } from "./backends/hive.js";
  * Factory: `createMemoryBackend()` picks the right one from env vars.
  */
 import { LocalMemoryBackend } from "./backends/local.js";
-import type { MemoryBackend, SearchResult } from "./types.js";
+import type { MemoryBackend, SearchOptions, SearchResult, StoreOptions } from "./types.js";
 
 export interface SemanticMemoryOptions {
   /** Path for local JSON storage (used by LocalMemoryBackend, and as fallback) */
@@ -33,24 +33,24 @@ export class SemanticMemory {
     return this.backend.name;
   }
 
-  async store(content: string, tags: string[] = []): Promise<string> {
+  async store(content: string, tags: string[] = [], options?: StoreOptions): Promise<string> {
     try {
-      return await this.backend.store(content, tags);
+      return await this.backend.store(content, tags, options);
     } catch {
       // If remote backend fails, fall through to local
       if (this.backend !== this.fallback) {
-        return this.fallback.store(content, tags);
+        return this.fallback.store(content, tags, options);
       }
       throw new Error("local memory backend failed");
     }
   }
 
-  async search(query: string, topK = 5): Promise<SearchResult[]> {
+  async search(query: string, topK = 5, options?: SearchOptions): Promise<SearchResult[]> {
     try {
-      return await this.backend.search(query, topK);
+      return await this.backend.search(query, topK, options);
     } catch {
       if (this.backend !== this.fallback) {
-        return this.fallback.search(query, topK);
+        return this.fallback.search(query, topK, options);
       }
       return [];
     }

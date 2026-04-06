@@ -6,7 +6,13 @@
 import { randomUUID } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
-import type { MemoryBackend, SearchResult, SemanticRecord } from "../types.js";
+import type {
+  MemoryBackend,
+  SearchOptions,
+  SearchResult,
+  SemanticRecord,
+  StoreOptions,
+} from "../types.js";
 
 interface LocalBackendOptions {
   filePath: string;
@@ -39,17 +45,25 @@ export class LocalMemoryBackend implements MemoryBackend {
     this.filePath = opts.filePath;
   }
 
-  async store(content: string, tags: string[] = []): Promise<string> {
+  async store(content: string, tags: string[] = [], options?: StoreOptions): Promise<string> {
     const records = await this.read();
     const id = randomUUID();
-    records.push({ id, content, tags, createdAt: new Date().toISOString() });
+    const record: SemanticRecord = { id, content, tags, createdAt: new Date().toISOString() };
+    if (options?.memoryType) {
+      record.memoryType = options.memoryType;
+    }
+    records.push(record);
     await this.write(records);
     return id;
   }
 
-  async search(query: string, topK = 5): Promise<SearchResult[]> {
+  async search(query: string, topK = 5, options?: SearchOptions): Promise<SearchResult[]> {
     const records = await this.read();
-    return records
+    let filtered = records;
+    if (options?.memoryType) {
+      filtered = records.filter((r) => r.memoryType === options.memoryType);
+    }
+    return filtered
       .map((r) => ({ ...r, score: score(query, r.content) }))
       .sort((a, b) => b.score - a.score)
       .slice(0, topK);
