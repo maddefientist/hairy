@@ -6,6 +6,8 @@
  * - Per-task timeout enforcement
  * - Status tracking per task
  * - Trace ID propagation from parent
+ * - Execution metadata lineage (when executionMetadataTracking is enabled)
+ * - Standardized telemetry events (when standardizedTelemetry is enabled)
  */
 
 import type { HairyClawLogger } from "@hairyclaw/observability";
@@ -17,6 +19,13 @@ import type {
   ToolExecutor,
 } from "./agent-loop.js";
 import { runAgentLoop } from "./agent-loop.js";
+import {
+  type ExecutionMetadata,
+  createChildExecutionMetadata,
+  endExecutionMetadata,
+} from "./execution-metadata.js";
+import type { FeatureFlagManager } from "./feature-flags.js";
+import { TELEMETRY_EVENTS, getMetadataLabels } from "./telemetry-events.js";
 
 export type SubagentStatus = "pending" | "running" | "completed" | "failed" | "timed_out";
 
@@ -42,6 +51,8 @@ export interface SubagentConfig {
   maxIterations?: number;
   /** Override runAgentLoop for testing. Defaults to the real runAgentLoop. */
   runLoop?: RunAgentLoopFn;
+  /** Feature flag manager for gating telemetry and metadata */
+  featureFlags?: FeatureFlagManager;
 }
 
 export interface SubagentSubmitOptions {
@@ -55,6 +66,8 @@ export interface SubagentSubmitOptions {
   parentTraceId: string;
   logger: HairyClawLogger;
   timeoutMs?: number;
+  /** Parent execution metadata for lineage tracking */
+  parentMetadata?: ExecutionMetadata;
 }
 
 /** Simple counting semaphore for concurrency control */
@@ -107,8 +120,9 @@ export class SubagentExecutor {
   private readonly tasks = new Map<string, SubagentResult>();
   private readonly running = new Map<string, Promise<SubagentResult>>();
   private readonly semaphore: Semaphore;
-  private readonly config: Required<Omit<SubagentConfig, "runLoop">>;
+  private readonly config: Required<Omit<SubagentConfig, "runLoop" | "featureFlags">>;
   private readonly runLoop: RunAgentLoopFn;
+  private readonly featureFlags?: FeatureFlagManager;
 
   constructor(config?: SubagentConfig) {
     this.config = {
@@ -117,6 +131,7 @@ export class SubagentExecutor {
       maxIterations: config?.maxIterations ?? 10,
     };
     this.runLoop = config?.runLoop ?? runAgentLoop;
+    this.featureFlags = config?.featureFlags;
     this.semaphore = new Semaphore(this.config.maxConcurrent);
   }
 
@@ -217,10 +232,22 @@ export class SubagentExecutor {
       throw new Error(`task not found: ${taskId}`);
     }
 
+    // Create child execution metadata if parent provided and feature enabled
+    const childMetadata = this.createChildMetadata(opts, taskId);
+
     await this.semaphore.acquire();
 
     taskResult.status = "running";
     taskResult.startedAt = Date.now();
+
+    // Emit subagent.start
+    this.emitTelemetry(opts.logger, TELEMETRY_EVENTS.subagent.start, childMetadata, {
+      taskId,
+      parentTraceId: opts.parentTraceId,
+      task: opts.task,
+      model: opts.model,
+      timeoutMs,
+    });
 
     try {
       const loopPromise = this.runLoop(
@@ -244,10 +271,20 @@ export class SubagentExecutor {
       taskResult.result = agentResult.text;
       taskResult.toolCallCount = agentResult.toolCalls.length;
       taskResult.completedAt = Date.now();
+
+      // Emit subagent.complete
+      const completedMeta = childMetadata ? endExecutionMetadata(childMetadata) : undefined;
+      this.emitTelemetry(opts.logger, TELEMETRY_EVENTS.subagent.complete, completedMeta, {
+        taskId,
+        parentTraceId: opts.parentTraceId,
+        toolCallCount: taskResult.toolCallCount,
+        durationMs: taskResult.completedAt - (taskResult.startedAt ?? taskResult.completedAt),
+      });
     } catch (error: unknown) {
       const errorMessage = error instanceof Error ? error.message : String(error);
+      const isTimeout = errorMessage.includes("timed out");
 
-      if (errorMessage.includes("timed out")) {
+      if (isTimeout) {
         taskResult.status = "timed_out";
       } else {
         taskResult.status = "failed";
@@ -255,6 +292,18 @@ export class SubagentExecutor {
 
       taskResult.error = errorMessage;
       taskResult.completedAt = Date.now();
+
+      // Emit subagent.timeout or subagent.error
+      const failedMeta = childMetadata ? endExecutionMetadata(childMetadata) : undefined;
+      const eventName = isTimeout
+        ? TELEMETRY_EVENTS.subagent.timeout
+        : TELEMETRY_EVENTS.subagent.error;
+      this.emitTelemetry(opts.logger, eventName, failedMeta, {
+        taskId,
+        parentTraceId: opts.parentTraceId,
+        error: errorMessage,
+        durationMs: taskResult.completedAt - (taskResult.startedAt ?? taskResult.completedAt),
+      });
 
       opts.logger.error(
         { taskId, error: errorMessage, parentTraceId: opts.parentTraceId },
@@ -265,5 +314,43 @@ export class SubagentExecutor {
     }
 
     return taskResult;
+  }
+
+  /**
+   * Create child execution metadata from parent when feature flag is enabled.
+   * Returns undefined when executionMetadataTracking is disabled or no parent metadata.
+   */
+  private createChildMetadata(
+    opts: SubagentSubmitOptions,
+    taskId: string,
+  ): ExecutionMetadata | undefined {
+    if (this.featureFlags?.isDisabled("executionMetadataTracking")) {
+      return undefined;
+    }
+    if (!opts.parentMetadata) {
+      return undefined;
+    }
+    const child = createChildExecutionMetadata(opts.parentMetadata, taskId, "subagent");
+    return child;
+  }
+
+  /**
+   * Emit a structured telemetry event when standardizedTelemetry flag is enabled.
+   */
+  private emitTelemetry(
+    logger: HairyClawLogger,
+    eventName: string,
+    metadata: ExecutionMetadata | undefined,
+    details?: Record<string, unknown>,
+  ): void {
+    if (this.featureFlags?.isDisabled("standardizedTelemetry")) {
+      return;
+    }
+    const logPayload: Record<string, unknown> = {
+      event: eventName,
+      ...(metadata ? getMetadataLabels(metadata) : {}),
+      ...(details ?? {}),
+    };
+    logger.info(logPayload, eventName);
   }
 }

@@ -3,6 +3,7 @@ import type {
   AgentLoopMessage as ProviderMessage,
   AgentLoopStreamOptions as StreamOptions,
 } from "./agent-loop.js";
+import type { ExecutionMetadata } from "./execution-metadata.js";
 import type { AgentResponse, HairyClawMessage, RunResult, ToolCallRecord } from "./types.js";
 
 export interface PluginContext {
@@ -12,6 +13,8 @@ export interface PluginContext {
   senderId: string;
   state: Map<string, unknown>;
   logger: HairyClawLogger;
+  /** Execution metadata for this processing cycle (present when executionMetadataTracking is enabled) */
+  executionMetadata?: ExecutionMetadata;
 }
 
 export interface HairyClawPlugin {

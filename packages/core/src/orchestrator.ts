@@ -1,7 +1,14 @@
 import { randomUUID } from "node:crypto";
 import { type HairyClawLogger, type Metrics, createTrace } from "@hairyclaw/observability";
+import {
+  type ExecutionMetadata,
+  createExecutionMetadata,
+  endExecutionMetadata,
+} from "./execution-metadata.js";
+import type { FeatureFlagManager } from "./feature-flags.js";
 import type { PluginContext, PluginRunner } from "./plugin.js";
 import type { TaskQueue } from "./task-queue.js";
+import { TELEMETRY_EVENTS, getMetadataLabels } from "./telemetry-events.js";
 import type {
   AgentResponse,
   HairyClawMessage,
@@ -16,6 +23,7 @@ interface OrchestratorDeps {
   metrics: Metrics;
   queue: TaskQueue;
   plugins?: PluginRunner;
+  featureFlags?: FeatureFlagManager;
   handleRun: (
     message: HairyClawMessage,
     traceId: string,
@@ -89,6 +97,10 @@ export class Orchestrator {
         const startedAt = Date.now();
         const trace = createTrace();
         const toolCalls: ToolCallRecord[] = [];
+
+        // Create execution metadata when feature flag is enabled
+        const metadata = this.createMetadata(trace.traceId);
+
         const pluginCtx: PluginContext = {
           traceId: trace.traceId,
           channelType: message.channelType,
@@ -96,7 +108,15 @@ export class Orchestrator {
           senderId: message.senderId,
           state: new Map<string, unknown>(),
           logger: this.deps.logger,
+          ...(metadata ? { executionMetadata: metadata } : {}),
         };
+
+        // Emit orchestrator.process.start
+        this.emitTelemetry(TELEMETRY_EVENTS.orchestrator.processStart, metadata, {
+          channelType: message.channelType,
+          channelId: message.channelId,
+          senderId: message.senderId,
+        });
 
         let effectiveMessage: HairyClawMessage | null = message;
         if (this.deps.plugins) {
@@ -127,6 +147,13 @@ export class Orchestrator {
             await this.deps.plugins.runOnRunEnd(pluginCtx, runResult, undefined);
           }
 
+          // Emit orchestrator.process.complete
+          const completedMetadata = metadata ? endExecutionMetadata(metadata) : undefined;
+          this.emitTelemetry(TELEMETRY_EVENTS.orchestrator.processComplete, completedMetadata, {
+            durationMs: runResult.durationMs,
+            stopReason: runResult.stopReason,
+          });
+
           this.logRun(runResult);
         } catch (error: unknown) {
           const runError = error instanceof Error ? error : new Error(String(error));
@@ -136,6 +163,14 @@ export class Orchestrator {
           );
           this.deps.metrics.increment("messages_out", 1, { status: "error" });
 
+          // Emit orchestrator.process.complete with error details
+          const failedMetadata = metadata ? endExecutionMetadata(metadata) : undefined;
+          this.emitTelemetry(TELEMETRY_EVENTS.orchestrator.processComplete, failedMetadata, {
+            durationMs: Date.now() - startedAt,
+            error: runError.message,
+            status: "error",
+          });
+
           if (this.deps.plugins) {
             await this.deps.plugins.runOnRunEnd(pluginCtx, undefined, runError);
           }
@@ -144,6 +179,37 @@ export class Orchestrator {
     } finally {
       this.processing = false;
     }
+  }
+
+  /**
+   * Create execution metadata when the feature flag is enabled.
+   * Returns undefined when executionMetadataTracking is disabled.
+   */
+  private createMetadata(traceId: string): ExecutionMetadata | undefined {
+    if (this.deps.featureFlags?.isDisabled("executionMetadataTracking")) {
+      return undefined;
+    }
+    // Feature flag enabled (or no flag manager present — default-on per M2 defaults)
+    return createExecutionMetadata(traceId, "orchestrator", "unified").build();
+  }
+
+  /**
+   * Emit a structured telemetry event when standardizedTelemetry flag is enabled.
+   */
+  private emitTelemetry(
+    eventName: string,
+    metadata: ExecutionMetadata | undefined,
+    details?: Record<string, unknown>,
+  ): void {
+    if (this.deps.featureFlags?.isDisabled("standardizedTelemetry")) {
+      return;
+    }
+    const logPayload: Record<string, unknown> = {
+      event: eventName,
+      ...(metadata ? getMetadataLabels(metadata) : {}),
+      ...(details ?? {}),
+    };
+    this.deps.logger.info(logPayload, eventName);
   }
 
   private logRun(result: RunResult): void {
