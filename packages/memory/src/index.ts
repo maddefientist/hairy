@@ -9,3 +9,4 @@ export * from "./fact-extractor.js";
 export * from "./backends/local.js";
 export * from "./backends/hive.js";
 export * from "./uploads.js";
+export * from "./observability.js";

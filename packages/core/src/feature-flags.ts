@@ -43,6 +43,15 @@ export interface FeatureFlags {
   /** Tool deferred loading and discovery */
   deferredToolLoading: boolean;
 
+  /** MCP connection lifecycle management (reconnect, health checks) */
+  mcpLifecycleManagement: boolean;
+
+  /** Tool scheduling with concurrency limits and priority queuing */
+  toolScheduling: boolean;
+
+  /** Memory observability: recall/ingest metrics wrapping */
+  memoryObservability: boolean;
+
   /** Remote session and worktree execution modes */
   remoteExecution: boolean;
 }
@@ -60,6 +69,9 @@ export const DEFAULT_FEATURE_FLAGS: FeatureFlags = {
   typedMemory: false, // Phase 2 (blocked on backend source)
   sharedArtifacts: false, // Phase 3
   deferredToolLoading: false, // Phase 4
+  mcpLifecycleManagement: false, // Phase 4 (M9)
+  toolScheduling: false, // Phase 4 (M9)
+  memoryObservability: false, // Phase 5 (M12)
   remoteExecution: false, // Phase 4
 };
 

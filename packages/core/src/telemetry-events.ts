@@ -152,6 +152,30 @@ export const TELEMETRY_EVENTS = {
     patternDetected: "policy.denial.pattern_detected",
   },
 
+  // MCP lifecycle
+  mcp: {
+    /** MCP server connected */
+    connect: "mcp.connect",
+    /** MCP server disconnected */
+    disconnect: "mcp.disconnect",
+    /** MCP server reconnection attempt */
+    reconnect: "mcp.reconnect",
+    /** MCP health check performed */
+    healthCheck: "mcp.health_check",
+    /** MCP connection state change */
+    stateChange: "mcp.state_change",
+  },
+
+  // Worker status
+  worker: {
+    /** Worker status changed */
+    statusChange: "worker.status_change",
+    /** Worker registered */
+    registered: "worker.registered",
+    /** Worker unregistered */
+    unregistered: "worker.unregistered",
+  },
+
   // Session/Lifecycle
   session: {
     /** Session started */

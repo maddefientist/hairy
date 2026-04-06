@@ -21,3 +21,6 @@ export * from "./mcp/types.js";
 export * from "./mcp/stdio-transport.js";
 export * from "./mcp/client.js";
 export * from "./mcp/registry.js";
+export * from "./mcp/lifecycle.js";
+export * from "./mcp/agent-augmentation.js";
+export * from "./scheduler.js";
