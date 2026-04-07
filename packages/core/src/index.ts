@@ -23,3 +23,5 @@ export * from "./agent-snapshot.js";
 export * from "./artifact-scratchpad.js";
 export * from "./plugins/denial-tracker.js";
 export * from "./worker-status.js";
+export * from "./plugin-manifest.js";
+export * from "./plugin-registry.js";

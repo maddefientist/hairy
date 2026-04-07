@@ -11,7 +11,18 @@
 
 import type { HairyClawLogger } from "@hairyclaw/observability";
 import type { FeatureFlagManager } from "../feature-flags.js";
+import type { PluginManifest } from "../plugin-manifest.js";
 import type { HairyClawPlugin, PluginContext } from "../plugin.js";
+
+export const MANIFEST: PluginManifest = {
+  name: "denial-tracker",
+  version: "1.0.0",
+  description: "Tracks guardrail denials and detects repeated denial patterns",
+  capabilities: ["denial-tracking", "policy-analytics"],
+  requiredPermissions: ["telemetry"],
+  featureFlag: "denialTracking",
+  trustLevel: "builtin",
+};
 import { TELEMETRY_EVENTS } from "../telemetry-events.js";
 
 /**

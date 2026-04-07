@@ -8,7 +8,17 @@
  * The UploadManager from @hairyclaw/memory satisfies UploadsPromptProvider.
  */
 
+import type { PluginManifest } from "../plugin-manifest.js";
 import type { HairyClawPlugin } from "../plugin.js";
+
+export const MANIFEST: PluginManifest = {
+  name: "uploads",
+  version: "1.0.0",
+  description: "Injects uploaded file context into the system prompt so the model is aware of attachments",
+  capabilities: ["file-injection", "context-enrichment"],
+  requiredPermissions: ["file-access"],
+  trustLevel: "builtin",
+};
 
 /** Minimal interface — satisfied by UploadManager from @hairyclaw/memory */
 export interface UploadsPromptProvider {

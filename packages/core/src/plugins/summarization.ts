@@ -1,5 +1,15 @@
 import type { AgentLoopContent, AgentLoopMessage, AgentLoopStreamOptions } from "../agent-loop.js";
+import type { PluginManifest } from "../plugin-manifest.js";
 import type { HairyClawPlugin, PluginContext } from "../plugin.js";
+
+export const MANIFEST: PluginManifest = {
+  name: "summarization",
+  version: "1.0.0",
+  description: "Compresses old context when token count exceeds threshold to keep prompts within limits",
+  capabilities: ["context-summarization", "token-management"],
+  requiredPermissions: [],
+  trustLevel: "builtin",
+};
 
 export interface SummarizationOptions {
   triggerTokens?: number;

@@ -1,6 +1,16 @@
 import { appendFile, mkdir } from "node:fs/promises";
 import { join } from "node:path";
+import type { PluginManifest } from "../plugin-manifest.js";
 import type { HairyClawPlugin, PluginContext } from "../plugin.js";
+
+export const MANIFEST: PluginManifest = {
+  name: "trace_logger",
+  version: "1.0.0",
+  description: "Appends structured JSONL trace entries for every run, model call, and tool invocation",
+  capabilities: ["tracing", "audit-log"],
+  requiredPermissions: ["filesystem-write"],
+  trustLevel: "builtin",
+};
 
 export interface TraceLoggerOptions {
   logDir: string;

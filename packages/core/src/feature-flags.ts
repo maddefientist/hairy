@@ -54,6 +54,9 @@ export interface FeatureFlags {
 
   /** Remote session and worktree execution modes */
   remoteExecution: boolean;
+
+  /** Plugin manifest schema + registry system (M11) */
+  pluginManifestEnabled: boolean;
 }
 
 /**
@@ -73,6 +76,7 @@ export const DEFAULT_FEATURE_FLAGS: FeatureFlags = {
   toolScheduling: false, // Phase 4 (M9)
   memoryObservability: false, // Phase 5 (M12)
   remoteExecution: false, // Phase 4
+  pluginManifestEnabled: false, // Phase 4 (M11)
 };
 
 /**

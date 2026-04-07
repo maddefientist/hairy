@@ -1,4 +1,14 @@
+import type { PluginManifest } from "../plugin-manifest.js";
 import type { HairyClawPlugin } from "../plugin.js";
+
+export const MANIFEST: PluginManifest = {
+  name: "content_safety",
+  version: "1.0.0",
+  description: "Filters model responses for secret leakage, blocked patterns, and length limits",
+  capabilities: ["content-filtering", "response-safety"],
+  requiredPermissions: [],
+  trustLevel: "builtin",
+};
 
 export interface ContentSafetyOptions {
   blockedPatterns?: RegExp[];

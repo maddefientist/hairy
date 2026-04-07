@@ -1,4 +1,14 @@
+import type { PluginManifest } from "../plugin-manifest.js";
 import type { HairyClawPlugin } from "../plugin.js";
+
+export const MANIFEST: PluginManifest = {
+  name: "cost_guard",
+  version: "1.0.0",
+  description: "Enforces daily spend budget; blocks model calls when budget is exhausted",
+  capabilities: ["cost-control", "budget-enforcement"],
+  requiredPermissions: ["cost-tracking"],
+  trustLevel: "builtin",
+};
 
 export interface CostGuardOptions {
   dailyBudgetUsd: number;

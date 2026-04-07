@@ -1,5 +1,15 @@
 import { createHash } from "node:crypto";
+import type { PluginManifest } from "../plugin-manifest.js";
 import type { HairyClawPlugin, PluginContext } from "../plugin.js";
+
+export const MANIFEST: PluginManifest = {
+  name: "loop_detection",
+  version: "1.0.0",
+  description: "Detects and stops repeated tool-call patterns to prevent agent loops",
+  capabilities: ["loop-detection", "safety"],
+  requiredPermissions: [],
+  trustLevel: "builtin",
+};
 import type { ToolCallRecord } from "../types.js";
 
 export interface LoopDetectionOptions {

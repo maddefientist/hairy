@@ -1,4 +1,14 @@
+import type { PluginManifest } from "../plugin-manifest.js";
 import type { HairyClawPlugin, PluginContext } from "../plugin.js";
+
+export const MANIFEST: PluginManifest = {
+  name: "guardrails",
+  version: "1.0.0",
+  description: "Policy-based tool authorization — blocks or allows tool calls via configurable provider",
+  capabilities: ["tool-authorization", "policy-enforcement"],
+  requiredPermissions: ["tool-control"],
+  trustLevel: "builtin",
+};
 
 // ---------------------------------------------------------------------------
 // GuardrailProvider interface
