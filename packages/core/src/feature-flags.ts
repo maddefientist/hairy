@@ -69,14 +69,14 @@ export const DEFAULT_FEATURE_FLAGS: FeatureFlags = {
   subagentContextForking: false, // Phase 3
   verificationWorker: false, // Phase 3
   sessionMemoryExtraction: false, // Phase 2
-  typedMemory: false, // Phase 2 (blocked on backend source)
+  typedMemory: true, // Phase 2 — backend deployed 2026-04-06
   sharedArtifacts: false, // Phase 3
   deferredToolLoading: false, // Phase 4
   mcpLifecycleManagement: false, // Phase 4 (M9)
   toolScheduling: false, // Phase 4 (M9)
-  memoryObservability: false, // Phase 5 (M12)
+  memoryObservability: true, // Phase 5 (M12) — enabled 2026-04-07
   remoteExecution: false, // Phase 4
-  pluginManifestEnabled: false, // Phase 4 (M11)
+  pluginManifestEnabled: true, // Phase 4 (M11) — enabled 2026-04-07
 };
 
 /**
