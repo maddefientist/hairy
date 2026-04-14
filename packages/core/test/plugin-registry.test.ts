@@ -41,7 +41,7 @@ const makeFlags = (enabled: Partial<FeatureFlags> = {}): FeatureFlagManager => {
   };
   return {
     isEnabled: (key: keyof FeatureFlags) => Boolean(store[key]),
-    isDisabled: (key: keyof FeatureFlags) => !Boolean(store[key]),
+    isDisabled: (key: keyof FeatureFlags) => !store[key],
     getAll: () => store as FeatureFlags,
     getDiagnostics: () => store as Record<string, boolean>,
   } as unknown as FeatureFlagManager;
@@ -105,7 +105,10 @@ describe("PluginRegistry — register / listAll", () => {
   it("allows multiple registrations", () => {
     const reg = new PluginRegistry();
     for (let i = 0; i < 5; i++) {
-      reg.register(makePlugin(`p${i}`), makeManifest({ name: `p${i}`, capabilities: [`cap-${i}`] }));
+      reg.register(
+        makePlugin(`p${i}`),
+        makeManifest({ name: `p${i}`, capabilities: [`cap-${i}`] }),
+      );
     }
     expect(reg.listAll()).toHaveLength(5);
   });
@@ -121,12 +124,22 @@ describe("PluginRegistry — conflict detection", () => {
     const logger = { warn: warnFn, info: vi.fn(), debug: vi.fn(), error: vi.fn() } as never;
     const reg = new PluginRegistry({ logger });
 
-    reg.register(makePlugin("plugin-a"), makeManifest({ name: "plugin-a", capabilities: ["cap-x"] }));
-    reg.register(makePlugin("plugin-b"), makeManifest({ name: "plugin-b", capabilities: ["cap-x"] }));
+    reg.register(
+      makePlugin("plugin-a"),
+      makeManifest({ name: "plugin-a", capabilities: ["cap-x"] }),
+    );
+    reg.register(
+      makePlugin("plugin-b"),
+      makeManifest({ name: "plugin-b", capabilities: ["cap-x"] }),
+    );
 
     expect(warnFn).toHaveBeenCalledOnce();
     const [obj, msg] = warnFn.mock.calls[0] as [Record<string, unknown>, string];
-    expect(obj).toMatchObject({ capability: "cap-x", plugin: "plugin-b", existingPlugin: "plugin-a" });
+    expect(obj).toMatchObject({
+      capability: "cap-x",
+      plugin: "plugin-b",
+      existingPlugin: "plugin-a",
+    });
     expect(msg).toContain("conflict");
   });
 
@@ -135,8 +148,14 @@ describe("PluginRegistry — conflict detection", () => {
     const logger = { warn: warnFn } as never;
     const reg = new PluginRegistry({ logger });
 
-    reg.register(makePlugin("a"), makeManifest({ name: "a", capabilities: ["shared", "unique-a"] }));
-    reg.register(makePlugin("b"), makeManifest({ name: "b", capabilities: ["shared", "unique-b"] }));
+    reg.register(
+      makePlugin("a"),
+      makeManifest({ name: "a", capabilities: ["shared", "unique-a"] }),
+    );
+    reg.register(
+      makePlugin("b"),
+      makeManifest({ name: "b", capabilities: ["shared", "unique-b"] }),
+    );
 
     // Only 'shared' should trigger a warning
     expect(warnFn).toHaveBeenCalledOnce();
@@ -188,9 +207,18 @@ describe("PluginRegistry — getByTrustLevel", () => {
   it("filters by trust level", () => {
     const reg = new PluginRegistry();
     reg.register(makePlugin("builtin"), makeManifest({ name: "builtin", trustLevel: "builtin" }));
-    reg.register(makePlugin("verified"), makeManifest({ name: "verified", trustLevel: "verified" }));
-    reg.register(makePlugin("community"), makeManifest({ name: "community", trustLevel: "community", capabilities: ["cap-c"] }));
-    reg.register(makePlugin("local"), makeManifest({ name: "local", trustLevel: "local", capabilities: ["cap-l"] }));
+    reg.register(
+      makePlugin("verified"),
+      makeManifest({ name: "verified", trustLevel: "verified" }),
+    );
+    reg.register(
+      makePlugin("community"),
+      makeManifest({ name: "community", trustLevel: "community", capabilities: ["cap-c"] }),
+    );
+    reg.register(
+      makePlugin("local"),
+      makeManifest({ name: "local", trustLevel: "local", capabilities: ["cap-l"] }),
+    );
 
     expect(reg.getByTrustLevel("builtin")).toHaveLength(1);
     expect(reg.getByTrustLevel("verified")).toHaveLength(1);
@@ -224,26 +252,38 @@ describe("PluginRegistry — getAutoLoadable trust filtering", () => {
 
   it("does NOT auto-load community plugins by default", () => {
     const reg = new PluginRegistry();
-    reg.register(makePlugin("a"), makeManifest({ name: "a", trustLevel: "community", capabilities: ["cap-c"] }));
+    reg.register(
+      makePlugin("a"),
+      makeManifest({ name: "a", trustLevel: "community", capabilities: ["cap-c"] }),
+    );
     expect(reg.getAutoLoadable()).toHaveLength(0);
   });
 
   it("does NOT auto-load local plugins by default", () => {
     const reg = new PluginRegistry();
-    reg.register(makePlugin("a"), makeManifest({ name: "a", trustLevel: "local", capabilities: ["cap-l"] }));
+    reg.register(
+      makePlugin("a"),
+      makeManifest({ name: "a", trustLevel: "local", capabilities: ["cap-l"] }),
+    );
     expect(reg.getAutoLoadable()).toHaveLength(0);
   });
 
   it("loads community plugin when explicitly enabled", () => {
     const reg = new PluginRegistry();
-    reg.register(makePlugin("community-x"), makeManifest({ name: "community-x", trustLevel: "community", capabilities: ["cap-cx"] }));
+    reg.register(
+      makePlugin("community-x"),
+      makeManifest({ name: "community-x", trustLevel: "community", capabilities: ["cap-cx"] }),
+    );
     const loaded = reg.getAutoLoadable({ explicitlyEnabled: ["community-x"] });
     expect(loaded).toHaveLength(1);
   });
 
   it("loads local plugin when explicitly enabled", () => {
     const reg = new PluginRegistry();
-    reg.register(makePlugin("local-x"), makeManifest({ name: "local-x", trustLevel: "local", capabilities: ["cap-lx"] }));
+    reg.register(
+      makePlugin("local-x"),
+      makeManifest({ name: "local-x", trustLevel: "local", capabilities: ["cap-lx"] }),
+    );
     const loaded = reg.getAutoLoadable({ explicitlyEnabled: ["local-x"] });
     expect(loaded).toHaveLength(1);
   });
@@ -251,8 +291,14 @@ describe("PluginRegistry — getAutoLoadable trust filtering", () => {
   it("mixes auto-trust and explicit correctly", () => {
     const reg = new PluginRegistry();
     reg.register(makePlugin("builtin"), makeManifest({ name: "builtin", trustLevel: "builtin" }));
-    reg.register(makePlugin("community"), makeManifest({ name: "community", trustLevel: "community", capabilities: ["cap-c2"] }));
-    reg.register(makePlugin("local"), makeManifest({ name: "local", trustLevel: "local", capabilities: ["cap-l2"] }));
+    reg.register(
+      makePlugin("community"),
+      makeManifest({ name: "community", trustLevel: "community", capabilities: ["cap-c2"] }),
+    );
+    reg.register(
+      makePlugin("local"),
+      makeManifest({ name: "local", trustLevel: "local", capabilities: ["cap-l2"] }),
+    );
 
     const loaded = reg.getAutoLoadable({ explicitlyEnabled: ["community"] });
     const names = loaded.map((e) => e.plugin.name);
@@ -273,7 +319,11 @@ describe("PluginRegistry — getAutoLoadable feature flag gating", () => {
 
     reg.register(
       makePlugin("denial-tracker"),
-      makeManifest({ name: "denial-tracker", featureFlag: "denialTracking", capabilities: ["cap-dt"] }),
+      makeManifest({
+        name: "denial-tracker",
+        featureFlag: "denialTracking",
+        capabilities: ["cap-dt"],
+      }),
     );
 
     expect(reg.getAutoLoadable()).toHaveLength(0);
@@ -285,7 +335,11 @@ describe("PluginRegistry — getAutoLoadable feature flag gating", () => {
 
     reg.register(
       makePlugin("denial-tracker"),
-      makeManifest({ name: "denial-tracker", featureFlag: "denialTracking", capabilities: ["cap-dt2"] }),
+      makeManifest({
+        name: "denial-tracker",
+        featureFlag: "denialTracking",
+        capabilities: ["cap-dt2"],
+      }),
     );
 
     expect(reg.getAutoLoadable()).toHaveLength(1);
@@ -317,12 +371,21 @@ describe("PluginRegistry — getAutoLoadable feature flag gating", () => {
     // builtin + flag enabled → auto-load
     reg.register(
       makePlugin("builtin-flagged"),
-      makeManifest({ name: "builtin-flagged", featureFlag: "denialTracking", capabilities: ["cap-bf"] }),
+      makeManifest({
+        name: "builtin-flagged",
+        featureFlag: "denialTracking",
+        capabilities: ["cap-bf"],
+      }),
     );
     // community + flag enabled → NOT auto-load (wrong trust)
     reg.register(
       makePlugin("community-flagged"),
-      makeManifest({ name: "community-flagged", trustLevel: "community", featureFlag: "denialTracking", capabilities: ["cap-cf2"] }),
+      makeManifest({
+        name: "community-flagged",
+        trustLevel: "community",
+        featureFlag: "denialTracking",
+        capabilities: ["cap-cf2"],
+      }),
     );
 
     const loaded = reg.getAutoLoadable();

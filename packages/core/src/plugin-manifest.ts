@@ -21,9 +21,7 @@ export const PluginManifestSchema = z.object({
   /** Unique plugin identifier — must match HairyClawPlugin.name */
   name: z.string().min(1, "name is required"),
   /** Semver-compatible version string */
-  version: z
-    .string()
-    .regex(/^\d+\.\d+\.\d+/, "version must start with semver (e.g. 1.0.0)"),
+  version: z.string().regex(/^\d+\.\d+\.\d+/, "version must start with semver (e.g. 1.0.0)"),
   /** Human-readable description */
   description: z.string().min(1, "description is required"),
   /** Capabilities this plugin provides (used for lookup and conflict detection) */

@@ -142,12 +142,33 @@ describe("ToolScheduler", () => {
     await new Promise((r) => setTimeout(r, 10));
 
     // Submit in order: low, normal, high — high should execute first after blocker
-    const pLow = scheduler.submit("low-tool", async () => { order.push("low"); return "low"; }, "low");
-    const pNormal = scheduler.submit("normal-tool", async () => { order.push("normal"); return "normal"; }, "normal");
-    const pHigh = scheduler.submit("high-tool", async () => { order.push("high"); return "high"; }, "high");
+    const pLow = scheduler.submit(
+      "low-tool",
+      async () => {
+        order.push("low");
+        return "low";
+      },
+      "low",
+    );
+    const pNormal = scheduler.submit(
+      "normal-tool",
+      async () => {
+        order.push("normal");
+        return "normal";
+      },
+      "normal",
+    );
+    const pHigh = scheduler.submit(
+      "high-tool",
+      async () => {
+        order.push("high");
+        return "high";
+      },
+      "high",
+    );
 
     // Release the blocker
-    unblock!();
+    unblock?.();
     await blocker;
     await pHigh;
     await pNormal;
@@ -187,7 +208,7 @@ describe("ToolScheduler", () => {
     );
     expect(overflowWarnings.length).toBeGreaterThan(0);
 
-    unblock!();
+    unblock?.();
     await blocker;
     await Promise.all(tasks);
   });
@@ -210,7 +231,7 @@ describe("ToolScheduler", () => {
     const queued = scheduler.submit("q", async () => "ok");
     expect(scheduler.queued).toBe(1);
 
-    unblock!();
+    unblock?.();
     await blocker;
     await queued;
 

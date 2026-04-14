@@ -10,3 +10,4 @@ export * from "./backends/local.js";
 export * from "./backends/hive.js";
 export * from "./uploads.js";
 export * from "./observability.js";
+export * from "./context-compressor.js";

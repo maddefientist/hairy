@@ -1,10 +1,12 @@
 import { setTimeout as delay } from "node:timers/promises";
 import type { HairyClawLogger as Logger } from "@hairyclaw/observability";
+import type { ApprovalGate } from "./approval.js";
 import type { Tool, ToolContext, ToolResult } from "./types.js";
 
 interface RegistryOptions {
   logger: Logger;
   defaultTimeoutMs?: number;
+  approvalGate?: ApprovalGate;
 }
 
 export class ToolRegistry {
@@ -41,6 +43,24 @@ export class ToolRegistry {
     }
 
     const startedAt = Date.now();
+
+    // Check approval gate before execution
+    if (this.opts.approvalGate) {
+      const decision = await this.opts.approvalGate.check(name, args);
+      if (decision === "deny") {
+        this.opts.logger.info(
+          { traceId: ctx.traceId, toolName: name },
+          "tool call denied by approval policy",
+        );
+        return { content: "tool call denied by approval policy", isError: true };
+      }
+      if (decision === "confirm") {
+        this.opts.logger.info(
+          { traceId: ctx.traceId, toolName: name },
+          "tool call approved after confirmation",
+        );
+      }
+    }
 
     try {
       const parsedArgs = tool.parameters.parse(args);

@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { Metrics } from "@hairyclaw/observability";
 import { describe, expect, it, vi } from "vitest";
 import { AuthProfileManager } from "../src/auth-profiles.js";
-import { ProviderGateway, classifyError } from "../src/gateway.js";
+import { ProviderGateway, classifyGatewayError } from "../src/gateway.js";
 import type { Provider, StreamEvent, StreamOptions } from "../src/types.js";
 
 const streamEvents = async (gateway: ProviderGateway): Promise<StreamEvent[]> => {
@@ -333,10 +333,10 @@ describe("ProviderGateway model fallback", () => {
   });
 
   it("classifies errors into timeout/rate_limit/auth/server", () => {
-    expect(classifyError("request timed out after 10ms")).toBe("timeout");
-    expect(classifyError("HTTP 429 from provider")).toBe("rate_limit");
-    expect(classifyError("401 unauthorized")).toBe("auth");
-    expect(classifyError("something else")).toBe("server");
+    expect(classifyGatewayError("request timed out after 10ms")).toBe("timeout");
+    expect(classifyGatewayError("HTTP 429 from provider")).toBe("rate_limit");
+    expect(classifyGatewayError("401 unauthorized")).toBe("auth");
+    expect(classifyGatewayError("something else")).toBe("server");
   });
 
   it("returns provider unavailable error when no attempts can be built", async () => {

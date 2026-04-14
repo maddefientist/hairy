@@ -7,3 +7,5 @@ export * from "./openrouter.js";
 export * from "./ollama.js";
 export * from "./gemini.js";
 export * from "./pi-ai-bridge.js";
+export * from "./error-classifier.js";
+export * from "./failover.js";

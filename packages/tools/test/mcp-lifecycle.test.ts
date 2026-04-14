@@ -2,8 +2,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { McpClient } from "../src/mcp/client.js";
 import {
   DEFAULT_LIFECYCLE_CONFIG,
-  type MCPLifecycleConfig,
   MCPConnectionLifecycle,
+  type MCPLifecycleConfig,
 } from "../src/mcp/lifecycle.js";
 import type { McpServerConfig } from "../src/mcp/types.js";
 
@@ -61,13 +61,23 @@ describe("MCPConnectionLifecycle", () => {
 
   it("starts in disconnected state", () => {
     const client = createMockClient();
-    const lifecycle = new MCPConnectionLifecycle(client, serverConfig, DEFAULT_LIFECYCLE_CONFIG, logger);
+    const lifecycle = new MCPConnectionLifecycle(
+      client,
+      serverConfig,
+      DEFAULT_LIFECYCLE_CONFIG,
+      logger,
+    );
     expect(lifecycle.state).toBe("disconnected");
   });
 
   it("connect transitions through connecting -> connected", async () => {
     const client = createMockClient();
-    const lifecycle = new MCPConnectionLifecycle(client, serverConfig, DEFAULT_LIFECYCLE_CONFIG, logger);
+    const lifecycle = new MCPConnectionLifecycle(
+      client,
+      serverConfig,
+      DEFAULT_LIFECYCLE_CONFIG,
+      logger,
+    );
 
     await lifecycle.connect();
 
@@ -83,7 +93,12 @@ describe("MCPConnectionLifecycle", () => {
     const client = createMockClient({
       connect: vi.fn().mockRejectedValue(new Error("spawn failed")),
     } as unknown as Partial<McpClient>);
-    const lifecycle = new MCPConnectionLifecycle(client, serverConfig, DEFAULT_LIFECYCLE_CONFIG, logger);
+    const lifecycle = new MCPConnectionLifecycle(
+      client,
+      serverConfig,
+      DEFAULT_LIFECYCLE_CONFIG,
+      logger,
+    );
 
     await expect(lifecycle.connect()).rejects.toThrow("spawn failed");
     expect(lifecycle.state).toBe("disconnected");
@@ -91,7 +106,12 @@ describe("MCPConnectionLifecycle", () => {
 
   it("disconnect transitions to disconnected", async () => {
     const client = createMockClient();
-    const lifecycle = new MCPConnectionLifecycle(client, serverConfig, DEFAULT_LIFECYCLE_CONFIG, logger);
+    const lifecycle = new MCPConnectionLifecycle(
+      client,
+      serverConfig,
+      DEFAULT_LIFECYCLE_CONFIG,
+      logger,
+    );
 
     await lifecycle.connect();
     await lifecycle.disconnect();
@@ -147,7 +167,12 @@ describe("MCPConnectionLifecycle", () => {
 
   it("healthCheck returns true when client is connected", async () => {
     const client = createMockClient();
-    const lifecycle = new MCPConnectionLifecycle(client, serverConfig, DEFAULT_LIFECYCLE_CONFIG, logger);
+    const lifecycle = new MCPConnectionLifecycle(
+      client,
+      serverConfig,
+      DEFAULT_LIFECYCLE_CONFIG,
+      logger,
+    );
 
     await lifecycle.connect();
     const ok = await lifecycle.healthCheck();
@@ -162,7 +187,12 @@ describe("MCPConnectionLifecycle", () => {
     const client = createMockClient({
       isConnected: false,
     } as unknown as Partial<McpClient>);
-    const lifecycle = new MCPConnectionLifecycle(client, serverConfig, DEFAULT_LIFECYCLE_CONFIG, logger);
+    const lifecycle = new MCPConnectionLifecycle(
+      client,
+      serverConfig,
+      DEFAULT_LIFECYCLE_CONFIG,
+      logger,
+    );
 
     const ok = await lifecycle.healthCheck();
 
@@ -172,7 +202,12 @@ describe("MCPConnectionLifecycle", () => {
 
   it("healthCheck promotes from degraded back to connected", async () => {
     const client = createMockClient();
-    const lifecycle = new MCPConnectionLifecycle(client, serverConfig, DEFAULT_LIFECYCLE_CONFIG, logger);
+    const lifecycle = new MCPConnectionLifecycle(
+      client,
+      serverConfig,
+      DEFAULT_LIFECYCLE_CONFIG,
+      logger,
+    );
 
     // Force into degraded state
     await lifecycle.connect();
@@ -189,7 +224,12 @@ describe("MCPConnectionLifecycle", () => {
 
   it("getStatus returns a diagnostic snapshot", async () => {
     const client = createMockClient();
-    const lifecycle = new MCPConnectionLifecycle(client, serverConfig, DEFAULT_LIFECYCLE_CONFIG, logger);
+    const lifecycle = new MCPConnectionLifecycle(
+      client,
+      serverConfig,
+      DEFAULT_LIFECYCLE_CONFIG,
+      logger,
+    );
 
     await lifecycle.connect();
     const status = lifecycle.getStatus();
@@ -202,7 +242,12 @@ describe("MCPConnectionLifecycle", () => {
 
   it("stopHealthChecks is safe to call without starting", () => {
     const client = createMockClient();
-    const lifecycle = new MCPConnectionLifecycle(client, serverConfig, DEFAULT_LIFECYCLE_CONFIG, logger);
+    const lifecycle = new MCPConnectionLifecycle(
+      client,
+      serverConfig,
+      DEFAULT_LIFECYCLE_CONFIG,
+      logger,
+    );
     // Should not throw
     lifecycle.stopHealthChecks();
   });

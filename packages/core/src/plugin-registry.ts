@@ -121,8 +121,7 @@ export class PluginRegistry {
 
     return this.entries.filter(({ manifest }) => {
       // --- Trust level gate ---
-      const isAutoTrust =
-        manifest.trustLevel === "builtin" || manifest.trustLevel === "verified";
+      const isAutoTrust = manifest.trustLevel === "builtin" || manifest.trustLevel === "verified";
       if (!isAutoTrust && !explicit.has(manifest.name)) {
         return false;
       }

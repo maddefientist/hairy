@@ -92,7 +92,7 @@ export class MCPConnectionLifecycle {
   constructor(
     private readonly client: McpClient,
     private readonly serverConfig: McpServerConfig,
-    private readonly config: MCPLifecycleConfig = DEFAULT_LIFECYCLE_CONFIG,
+    private readonly config: MCPLifecycleConfig,
     private readonly logger: HairyClawLogger,
   ) {}
 

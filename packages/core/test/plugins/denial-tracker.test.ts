@@ -13,14 +13,14 @@
 import { describe, expect, it, vi } from "vitest";
 import { FeatureFlagManager } from "../../src/feature-flags.js";
 import type { PluginContext } from "../../src/plugin.js";
-import { TELEMETRY_EVENTS } from "../../src/telemetry-events.js";
 import {
-  DenialTracker,
   type DenialRecord,
+  DenialTracker,
   type DiagnosticRule,
   createDenialTrackerPlugin,
   diagnoseRules,
 } from "../../src/plugins/denial-tracker.js";
+import { TELEMETRY_EVENTS } from "../../src/telemetry-events.js";
 
 const makeLogger = () => {
   const logger = {
@@ -292,7 +292,9 @@ describe("diagnoseRules", () => {
     const report = diagnoseRules(rules);
     expect(report.shadowedRules).toHaveLength(0);
     expect(report.conflicts).toHaveLength(0);
-    expect(report.recommendations).toContain("No shadowed or conflicting rules detected. Policy looks clean.");
+    expect(report.recommendations).toContain(
+      "No shadowed or conflicting rules detected. Policy looks clean.",
+    );
   });
 
   it("detects shadowed path rule (narrow blocked by broader block)", () => {
@@ -374,9 +376,7 @@ describe("diagnoseRules", () => {
   });
 
   it("warns about very broad block paths", () => {
-    const rules: DiagnosticRule[] = [
-      { type: "block", scope: "path", value: "/" },
-    ];
+    const rules: DiagnosticRule[] = [{ type: "block", scope: "path", value: "/" }];
 
     const report = diagnoseRules(rules);
     expect(report.recommendations.some((r) => r.includes("Very broad block path"))).toBe(true);
@@ -399,7 +399,9 @@ describe("diagnoseRules", () => {
     const report = diagnoseRules([]);
     expect(report.shadowedRules).toHaveLength(0);
     expect(report.conflicts).toHaveLength(0);
-    expect(report.recommendations).toContain("No shadowed or conflicting rules detected. Policy looks clean.");
+    expect(report.recommendations).toContain(
+      "No shadowed or conflicting rules detected. Policy looks clean.",
+    );
   });
 
   it("does not flag different-type rules as shadowed", () => {

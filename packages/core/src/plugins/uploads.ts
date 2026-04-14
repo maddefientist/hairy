@@ -14,7 +14,8 @@ import type { HairyClawPlugin } from "../plugin.js";
 export const MANIFEST: PluginManifest = {
   name: "uploads",
   version: "1.0.0",
-  description: "Injects uploaded file context into the system prompt so the model is aware of attachments",
+  description:
+    "Injects uploaded file context into the system prompt so the model is aware of attachments",
   capabilities: ["file-injection", "context-enrichment"],
   requiredPermissions: ["file-access"],
   trustLevel: "builtin",

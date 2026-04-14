@@ -241,7 +241,9 @@ export class DenialTracker {
  *
  * Simpler approach: The tracker wraps a GuardrailProvider and intercepts denials directly.
  */
-export const createDenialTrackerPlugin = (config: DenialTrackerConfig): {
+export const createDenialTrackerPlugin = (
+  config: DenialTrackerConfig,
+): {
   plugin: HairyClawPlugin;
   tracker: DenialTracker;
 } => {
@@ -353,7 +355,11 @@ export const diagnoseRules = (rules: DiagnosticRule[]): RuleDiagnosticReport => 
       if (narrow.scope !== broad.scope) continue;
 
       // For path-scoped rules: check if broad path is a parent of narrow path
-      if (narrow.scope === "path" && isPathPrefix(broad.value, narrow.value) && broad.value !== narrow.value) {
+      if (
+        narrow.scope === "path" &&
+        isPathPrefix(broad.value, narrow.value) &&
+        broad.value !== narrow.value
+      ) {
         shadowedRules.push({
           shadowedRule: narrow,
           shadowedBy: broad,

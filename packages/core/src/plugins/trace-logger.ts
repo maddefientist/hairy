@@ -6,7 +6,8 @@ import type { HairyClawPlugin, PluginContext } from "../plugin.js";
 export const MANIFEST: PluginManifest = {
   name: "trace_logger",
   version: "1.0.0",
-  description: "Appends structured JSONL trace entries for every run, model call, and tool invocation",
+  description:
+    "Appends structured JSONL trace entries for every run, model call, and tool invocation",
   capabilities: ["tracing", "audit-log"],
   requiredPermissions: ["filesystem-write"],
   trustLevel: "builtin",

@@ -23,7 +23,10 @@ import { Orchestrator } from "../src/orchestrator.js";
 // ---------------------------------------------------------------------------
 
 describe("createArtifactScratchpad", () => {
-  const makeMeta = (agent = "agent-1", type: ArtifactMetadata["type"] = "text"): ArtifactMetadata => ({
+  const makeMeta = (
+    agent = "agent-1",
+    type: ArtifactMetadata["type"] = "text",
+  ): ArtifactMetadata => ({
     producedBy: agent,
     timestamp: Date.now(),
     type,
@@ -300,11 +303,16 @@ describe("Orchestrator scratchpad integration", () => {
       handleRun: vi.fn(),
     });
 
-    orch.putArtifact("trace-1", "data.json", { foo: "bar" }, {
-      producedBy: "fetcher",
-      timestamp: Date.now(),
-      type: "data",
-    });
+    orch.putArtifact(
+      "trace-1",
+      "data.json",
+      { foo: "bar" },
+      {
+        producedBy: "fetcher",
+        timestamp: Date.now(),
+        type: "data",
+      },
+    );
 
     const value = orch.getArtifact("trace-1", "data.json");
     expect(value).toEqual({ foo: "bar" });

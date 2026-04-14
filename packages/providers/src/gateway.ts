@@ -32,7 +32,9 @@ const envVarForProvider = (provider: string): string | null => {
   return null;
 };
 
-export const classifyError = (error: unknown): "timeout" | "rate_limit" | "auth" | "server" => {
+export const classifyGatewayError = (
+  error: unknown,
+): "timeout" | "rate_limit" | "auth" | "server" => {
   const msg = error instanceof Error ? error.message : String(error);
   const lower = msg.toLowerCase();
   if (lower.includes("timeout") || lower.includes("timed out") || lower.includes("aborted")) {
@@ -133,7 +135,7 @@ export class ProviderGateway {
       if (hadError) {
         failures.push(`${attemptLabel}: ${errorReason}`);
         if (profile && this.opts.authProfiles) {
-          this.opts.authProfiles.reportFailure(profile.id, classifyError(errorReason));
+          this.opts.authProfiles.reportFailure(profile.id, classifyGatewayError(errorReason));
         }
         continue;
       }
