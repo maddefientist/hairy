@@ -245,6 +245,49 @@ daily_budget_usd = 10.0
 alert_threshold_pct = 80
 ```
 
+### Resilience layer
+
+Every gateway call passes through three modules:
+
+- **Circuit breaker** — opens after N failures per provider/profile within a window; cooldown before half-open probe
+- **Rate-limit tracker** — parses `Retry-After` and provider-specific headers; suppresses calls until quota resets
+- **Error classifier** — splits errors into retryable (429/5xx/network), terminal (auth/quota), and user (400/schema) so failover doesn't waste budget
+
+### Auth profiles
+
+`auth-profiles.json` stores multiple credentials per provider with usage stats. The gateway picks the healthiest profile (low error rate, not rate-limited) and rotates to spread quota. Designed for OAuth-based providers (e.g. Gemini CLI) whose tokens expire often — the gateway routes around expired profiles while re-auth happens out of band.
+
+See [docs/providers.md](docs/providers.md) for full details.
+
+## Subagents
+
+The orchestrator spawns subagents in two modes:
+
+- **fork** — child inherits parent context (conversation, memory, scratchpad). Used for delegation when shared context matters.
+- **fresh** — child starts clean. Cheaper, no leakage; used for isolated tool runs or sensitive work.
+
+Subagents emit telemetry, can require approval, and write results to a shared **artifact scratchpad** the parent reads back. A **verification worker** can re-check subagent output against the original goal before it's accepted.
+
+## MCP
+
+Hairy is an MCP client. `packages/tools/src/mcp/` implements:
+- **stdio transport** — spawn an MCP server as a child process, frame JSON-RPC over stdin/stdout
+- **client** — protocol handshake, capability negotiation, tool discovery
+- **registry** — namespace MCP tools alongside built-ins
+- **lifecycle** — start, health-check, restart, stop; handles reconnects on transient failures
+
+Configure servers in `config/default.toml` under `[mcp.servers.<name>]`. SSE/HTTP transports are tracked as future work in PROJECT.md.
+
+## Plugins
+
+Plugins are external packages with a `plugin manifest` declaring tools, prompts, and a **trust level**. The plugin manager loads only manifests that meet the configured trust threshold. This is the supported way to add third-party tools without modifying the agent binary.
+
+## Snapshots & telemetry
+
+- **Agent snapshots** — orchestrator state checkpoint/restore, used for crash recovery and debugging
+- **Typed memory contract** — backends implement a typed interface; observability hooks expose memory hits/misses per turn
+- **Standardized telemetry** — every tool call, provider call, and subagent run carries execution metadata (trace ID, parent span, intent, cost) into a single stream
+
 ## Initiative / Proactivity Engine
 
 The agent doesn't just respond — it acts when it should.

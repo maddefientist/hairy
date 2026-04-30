@@ -27,7 +27,7 @@ HairyClaw is not a pre-built agent. It's a **framework** — a starting template
 - Sidecar protocol for compute-heavy extensions (Rust/Go)
 
 You customize it by:
-1. Editing `apps/hairyclaw-agent/src/main.ts` to wire your providers, channels, and tools
+1. Editing `apps/hairy-agent/src/main.ts` to wire your providers, channels, and tools
 2. Adding custom skills and system prompts in `data/memory/`
 3. Writing Rust/Go sidecars to handle specialized work
 4. Configuring rules in TOML files
@@ -179,7 +179,7 @@ pnpm dev
 
 You should see:
 ```
-info: hairyclaw-agent started
+info: hairy-agent started
 ```
 
 Then:
@@ -247,19 +247,47 @@ The `ProviderGateway` routes requests to LLMs based on intent:
 - **long_context**: Big context (OpenRouter)
 - **complex**: Best reasoning (Anthropic)
 
-Routing rules live in `config/providers.toml`. If the primary provider fails, it tries the fallback chain.
+Routing rules live in `config/providers.toml`. If the primary provider fails, the gateway walks a fallback chain.
+
+**Resilience layer** (added in the providers hardening pass):
+- **Circuit breaker** — trips a provider out of rotation after repeated failures, with backoff before re-trying
+- **Rate-limit tracker** — parses `Retry-After` and provider-specific headers, suppresses calls until the window clears
+- **Error classifier** — distinguishes retryable (429/5xx/network) from terminal errors (auth, quota exhausted) so the failover loop doesn't burn budget on doomed retries
+- **Auth profiles** — multiple API keys per provider with per-profile usage stats; the gateway rotates across healthy profiles, useful for OAuth-based providers (e.g. Gemini CLI auth) whose tokens expire frequently
 
 ### Tools
 
-Tools are functions Hairy can call:
-- **bash**: Execute shell commands (`ls`, `git`, etc.)
-- **read**: Read files and images
-- **write**: Create/write files
-- **edit**: Find-and-replace edits
-- **web-search**: Query the web via DuckDuckGo
-- **sidecars**: Custom Rust/Go binaries
+Tools are functions Hairy can call. Built-ins:
 
-All tool inputs are validated with Zod. All executions are logged with trace IDs.
+**Filesystem & shell**
+- `bash` — execute shell commands
+- `read` / `write` / `edit` — file I/O and find-and-replace
+- `file-upload` — handle uploaded attachments
+
+**Web & content**
+- `web-search` — DuckDuckGo queries
+- `web-fetch` — fetch and extract page content
+- `browser` — headless browsing with JS execution
+- `pdf-extract` — extract text from PDFs
+- `video-download` — download media from URLs
+- `video-extract` — frame/transcript extraction
+
+**Remote & orchestration**
+- `ssh-exec` — execute commands on remote hosts
+- `chain` — sequence multiple tool calls in one turn
+- `subagent` — spawn isolated worker agents (fork/fresh modes)
+- `reminder` — schedule future self-actions
+- `scheduler` — cron-style recurring tasks
+
+**Memory & identity**
+- `memory-recall` / `memory-ingest` — semantic memory access
+- `identity-evolve` — update agent identity from interactions
+
+**Extension surfaces**
+- **Sidecars** — Rust/Go binaries via JSON-RPC over stdio
+- **MCP servers** — connect to any Model Context Protocol server (stdio transport); tools auto-registered with lifecycle management
+
+All tool inputs are validated with Zod. All executions are logged with trace IDs and emit structured telemetry.
 
 ### Memory
 
@@ -310,6 +338,39 @@ The **initiative engine** fires scheduled tasks and proactive actions:
 
 Rules can require approval before acting on the user.
 
+### Subagents (fork / fresh)
+
+The orchestrator can spawn subagents in two modes:
+- **fork** — inherits parent context (full conversation, memory) for delegation tasks
+- **fresh** — clean slate for isolated work; cheaper, no leakage from parent
+
+Subagents emit their own telemetry, can be gated by approval, and feed results back into the parent via a shared artifact scratchpad. A separate **verification worker** can re-check subagent output before it's accepted.
+
+### MCP servers
+
+Hairy speaks the [Model Context Protocol](https://modelcontextprotocol.io). Configure stdio MCP servers in `config/default.toml`; their tools are registered into the same registry as built-ins, with lifecycle management (start, health check, restart, stop).
+
+### Plugins
+
+Plugins are external packages discovered via a `plugin manifest`. Each manifest declares tools, prompts, and a trust level. The plugin manager loads only manifests that meet the configured trust threshold — guards against arbitrary code in untrusted plugins.
+
+### Snapshots & observability
+
+- **Agent snapshots** — orchestrator state can be checkpointed and restored, useful for crash recovery and time-travel debugging
+- **Typed memory contract** — memory backends implement a typed interface; observability hooks expose memory hits/misses per turn
+- **Standardized telemetry** — every tool call, provider call, and subagent run carries execution metadata (trace ID, parent span, intent, cost) into a single telemetry stream
+
+### hairy-web (dashboard)
+
+`apps/hairy-web` is an htmx-based dashboard that reads from the same data dir as the agent. Routes:
+- `/` — live conversations and run status
+- `/memory` — browse semantic + episodic memory
+- `/tools` — tool registry, recent invocations, permission state
+- `/initiatives` — scheduled tasks and proactivity rules
+- `/settings` — runtime config
+
+Run it alongside the agent (`pnpm --filter hairy-web dev`) or deploy via `deploy/hairy-web.service`.
+
 ### Sidecars
 
 For compute-heavy work, Hairy spawns external binaries (Rust/Go) that speak JSON-RPC 2.0 over stdio:
@@ -356,7 +417,7 @@ export const createMyTool = (): Tool => ({
 });
 ```
 
-Register in `apps/hairyclaw-agent/src/main.ts`:
+Register in `apps/hairy-agent/src/main.ts`:
 ```typescript
 registry.register(createMyTool());
 ```
@@ -364,7 +425,7 @@ registry.register(createMyTool());
 ### Create a Skill
 
 1. Create `data/skills/<skill-id>/SKILL.md` with description
-2. Edit `apps/hairyclaw-agent/src/main.ts` to include prompt fragment
+2. Edit `apps/hairy-agent/src/main.ts` to include prompt fragment
 3. Mark as "promoted" in skill registry when ready
 
 ### Build a Rust Sidecar
@@ -441,14 +502,18 @@ Full details: [ARCHITECTURE.md](ARCHITECTURE.md)
 ## Project Structure
 
 ```
-apps/hairyclaw-agent/              # Main daemon
+apps/
+  hairy-agent/                 # Main daemon (telegram/CLI/webhook entrypoint)
+  hairy-web/                   # htmx dashboard (conversations, memory, tools, settings)
 packages/
   observability/               # Logging, metrics, tracing
-  core/                        # Queue, scheduler, orchestrator
-  providers/                   # LLM gateway + routing
-  channels/                    # Adapters (Telegram, CLI, etc.)
-  tools/                       # Tool registry + sidecars
-  memory/                      # Conversation + semantic memory
+  core/                        # Orchestrator, agent-loop, subagent executor,
+                               #   feature flags, execution metadata, snapshots
+  providers/                   # Gateway + routing + circuit breaker + rate-limit tracker
+                               #   + auth profiles + error classifier + failover
+  channels/                    # Adapters (Telegram, WhatsApp, CLI, webhooks)
+  tools/                       # Tool registry, builtins, sidecar manager, MCP client
+  memory/                      # Conversation, semantic, episodic, context-compressor
   growth/                      # Skills, versioning, reflection
 sidecars/
   example-rust/                # Rust template
@@ -457,6 +522,7 @@ config/
   default.toml                 # Base config
   providers.toml               # Routing rules
   tools.toml                   # Permissions
+deploy/                        # systemd unit files (hairy-agent, hairy-web)
 docker/                        # Dockerfile + compose
 docs/                          # Getting started, guides
 data/                          # Runtime: context, skills, memories (created on first run)
