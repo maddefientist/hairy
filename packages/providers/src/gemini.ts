@@ -131,7 +131,7 @@ export const createGeminiProvider = (opts: GeminiOptions = {}): Provider => {
       messages: ProviderMessage[],
       streamOpts: StreamOptions,
     ): AsyncIterable<StreamEvent> {
-      const apiKey = opts.apiKey ?? process.env.GEMINI_API_KEY;
+      const apiKey = streamOpts.credential ?? opts.apiKey ?? process.env.GEMINI_API_KEY;
       if (!apiKey) {
         yield { type: "error", error: "GEMINI_API_KEY is missing" };
         return;

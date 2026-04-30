@@ -9,6 +9,8 @@ import type {
 
 interface OllamaOptions {
   baseUrl?: string;
+  /** Sets num_ctx in Ollama options — controls the KV-cache / context window for cloud-routed models */
+  contextWindow?: number;
 }
 
 interface OllamaToolCall {
@@ -23,6 +25,7 @@ interface OllamaToolCall {
 interface OllamaChatMessage {
   role: "system" | "user" | "assistant" | "tool";
   content?: string;
+  images?: string[];
   tool_calls?: OllamaToolCall[];
   tool_call_id?: string;
   tool_name?: string;
@@ -111,8 +114,21 @@ const toOllamaMessages = (
     }
 
     if (message.role === "system" || message.role === "user") {
-      if (text.length > 0) {
-        result.push({ role: message.role, content: text });
+      const images: string[] = message.content
+        .filter((part) => part.type === "image" && part.image !== undefined)
+        .map((part) => {
+          const img = part.image!;
+          // Ollama needs base64 strings; skip URL images (not natively supported)
+          return "data" in img ? img.data.toString("base64") : null;
+        })
+        .filter((b64): b64 is string => b64 !== null);
+
+      if (text.length > 0 || images.length > 0) {
+        result.push({
+          role: message.role,
+          content: text,
+          ...(images.length > 0 ? { images } : {}),
+        });
       }
       continue;
     }
@@ -197,6 +213,7 @@ export const createOllamaProvider = (opts: OllamaOptions = {}): Provider => {
         options: {
           temperature: streamOpts.temperature,
           num_predict: streamOpts.maxTokens,
+          ...(opts.contextWindow ? { num_ctx: opts.contextWindow } : {}),
         },
       };
 
@@ -364,7 +381,7 @@ export const createOllamaProvider = (opts: OllamaOptions = {}): Provider => {
             id: model.name,
             name: model.name,
             provider: "ollama",
-            contextWindow: 8192,
+            contextWindow: opts.contextWindow ?? 8192,
             supportsImages: true,
             supportsThinking: true,
           }));

@@ -63,8 +63,14 @@ export const classifyError = (error: Error): ClassifiedError => {
     };
 
   // Pattern matching on message
-  if (RATE_LIMIT_PATTERNS.some((p) => p.test(message)))
-    return { reason: "rate_limit", retryable: true, suggestedDelayMs: 5000, originalError: error };
+  if (RATE_LIMIT_PATTERNS.some((p) => p.test(message))) {
+    // Honour Retry-After header when provider encoded it as "retry_after:N" (seconds)
+    const retryAfterMatch = message.match(/retry_after:(\d+)/);
+    const suggestedDelayMs = retryAfterMatch
+      ? parseInt(retryAfterMatch[1], 10) * 1000
+      : 5000;
+    return { reason: "rate_limit", retryable: true, suggestedDelayMs, originalError: error };
+  }
   if (AUTH_PATTERNS.some((p) => p.test(message)))
     return { reason: "auth_failure", retryable: false, suggestedDelayMs: 0, originalError: error };
   if (CONTEXT_LENGTH_PATTERNS.some((p) => p.test(message)))

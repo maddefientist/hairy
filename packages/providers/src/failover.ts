@@ -80,9 +80,11 @@ export const createFailoverProvider = (deps: FailoverProviderDeps): Provider => 
               return;
             }
 
-            // Retryable: wait with backoff
+            // Retryable: use provider's suggested delay when present, else exponential backoff
             if (classified.retryable) {
-              const delayMs = jitteredBackoff(backoffBaseMs, attempt, backoffMaxMs);
+              const delayMs = classified.suggestedDelayMs > 0
+                ? classified.suggestedDelayMs
+                : jitteredBackoff(backoffBaseMs, attempt, backoffMaxMs);
               await new Promise((resolve) => setTimeout(resolve, delayMs));
             }
           } catch (err: unknown) {
@@ -95,7 +97,9 @@ export const createFailoverProvider = (deps: FailoverProviderDeps): Provider => 
             );
 
             if (!classified.retryable) break;
-            const delayMs = jitteredBackoff(backoffBaseMs, attempt, backoffMaxMs);
+            const delayMs = classified.suggestedDelayMs > 0
+              ? classified.suggestedDelayMs
+              : jitteredBackoff(backoffBaseMs, attempt, backoffMaxMs);
             await new Promise((resolve) => setTimeout(resolve, delayMs));
           }
         }

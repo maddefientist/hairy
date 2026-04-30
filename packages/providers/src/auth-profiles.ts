@@ -140,7 +140,14 @@ export class AuthProfileManager {
     health.consecutiveErrors += 1;
     health.failureCounts[reason] = (health.failureCounts[reason] ?? 0) + 1;
 
-    if (health.consecutiveErrors >= this.cooldownThreshold) {
+    // Only cool down the auth profile for credential-related failures (auth, rate_limit).
+    // Server and timeout errors are transient infrastructure issues handled by the circuit
+    // breaker — cooling down the profile here blocks all other models sharing the same
+    // credential, which is the wrong scope.
+    if (
+      (reason === "auth" || reason === "rate_limit") &&
+      health.consecutiveErrors >= this.cooldownThreshold
+    ) {
       const exponent = health.consecutiveErrors - this.cooldownThreshold;
       const cooldownMs = Math.min(this.baseCooldownMs * 2 ** exponent, this.maxCooldownMs);
       health.cooldownUntil = now + cooldownMs;
@@ -154,6 +161,40 @@ export class AuthProfileManager {
         "auth profile moved to cooldown",
       );
     }
+  }
+
+  refreshCredential(
+    profileId: string,
+    credential: string,
+    expiresAt?: number,
+    refreshToken?: string,
+  ): boolean {
+    const profile = this.profiles.get(profileId);
+    if (!profile) return false;
+
+    if (typeof credential !== "string" || credential.trim().length === 0) {
+      this.logger.warn({ profileId: profileId.slice(0, 8) }, "refreshCredential rejected: empty credential");
+      return false;
+    }
+    if (expiresAt !== undefined && (!Number.isFinite(expiresAt) || expiresAt <= Date.now())) {
+      this.logger.warn({ profileId: profileId.slice(0, 8) }, "refreshCredential rejected: invalid or expired expiresAt");
+      return false;
+    }
+
+    profile.credential = credential;
+    if (expiresAt !== undefined) profile.expiresAt = expiresAt;
+    // Only overwrite refreshToken if the new one is non-empty; keep old token on empty
+    if (typeof refreshToken === "string" && refreshToken.trim().length > 0) {
+      profile.refreshToken = refreshToken;
+    }
+
+    const health = this.getOrCreateHealth(profileId);
+    health.failureCounts.auth = 0;
+    health.consecutiveErrors = 0;
+    health.cooldownUntil = undefined;
+
+    this.logger.info({ profileId: profileId.slice(0, 8) }, "credential refreshed");
+    return true;
   }
 
   clearCooldown(profileIdOrProvider: string): void {
@@ -197,8 +238,8 @@ export class AuthProfileManager {
       })),
     };
 
-    await mkdir(dirname(this.opts.filePath), { recursive: true });
-    await writeFile(this.opts.filePath, JSON.stringify(state, null, 2), "utf8");
+    await mkdir(dirname(this.opts.filePath), { recursive: true, mode: 0o700 });
+    await writeFile(this.opts.filePath, JSON.stringify(state, null, 2), { encoding: "utf8", mode: 0o600 });
   }
 
   async load(): Promise<void> {
@@ -228,7 +269,8 @@ export class AuthProfileManager {
           this.health.set(profile.id, defaultHealth());
         }
       }
-    } catch {
+    } catch (err) {
+      this.logger.warn({ err }, "auth-profiles: failed to load state, starting fresh");
       this.profiles.clear();
       this.health.clear();
     }

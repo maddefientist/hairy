@@ -216,6 +216,60 @@ describe("createOllamaProvider", () => {
     expect(sysMsg?.content).toBe("You are a helpful assistant.");
   });
 
+  it("sends base64 image data in user message", async () => {
+    const provider = createOllamaProvider({ baseUrl: "http://localhost:11434" });
+    let capturedBody: Record<string, unknown> = {};
+    global.fetch = vi.fn().mockImplementation(async (_url, init) => {
+      capturedBody = JSON.parse(init?.body as string) as Record<string, unknown>;
+      return {
+        ok: true,
+        json: async () => ({ message: { role: "assistant", content: "a cat" }, done: true }),
+      };
+    });
+
+    const imageData = Buffer.from("fakeimagedata");
+    const messages: ProviderMessage[] = [
+      {
+        role: "user",
+        content: [
+          { type: "text", text: "what is this?" },
+          { type: "image", image: { data: imageData, mimeType: "image/jpeg" } },
+        ],
+      },
+    ];
+
+    for await (const _ of provider.stream(messages, { model: "llava" })) {
+      // drain
+    }
+
+    const sent = capturedBody.messages as Array<Record<string, unknown>>;
+    const userMsg = sent.find((m) => m.role === "user");
+    expect(userMsg?.images).toEqual([imageData.toString("base64")]);
+    expect(userMsg?.content).toBe("what is this?");
+  });
+
+  it("sends num_ctx when contextWindow is configured", async () => {
+    const provider = createOllamaProvider({ baseUrl: "http://localhost:11434", contextWindow: 131072 });
+    let capturedBody: Record<string, unknown> = {};
+    global.fetch = vi.fn().mockImplementation(async (_url, init) => {
+      capturedBody = JSON.parse(init?.body as string) as Record<string, unknown>;
+      return {
+        ok: true,
+        json: async () => ({ message: { role: "assistant", content: "ok" }, done: true }),
+      };
+    });
+
+    for await (const _ of provider.stream(
+      [{ role: "user", content: [{ type: "text", text: "hi" }] }],
+      { model: "glm5.1:cloud" },
+    )) {
+      // drain
+    }
+
+    const opts = capturedBody.options as Record<string, unknown>;
+    expect(opts?.num_ctx).toBe(131072);
+  });
+
   it("listModels returns empty array on fetch error", async () => {
     const provider = createOllamaProvider({ baseUrl: "http://localhost:11434" });
     global.fetch = vi.fn().mockRejectedValue(new Error("ECONNREFUSED"));

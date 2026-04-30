@@ -4,7 +4,8 @@ import { join } from "node:path";
 import { Metrics } from "@hairyclaw/observability";
 import { describe, expect, it, vi } from "vitest";
 import { AuthProfileManager } from "../src/auth-profiles.js";
-import { ProviderGateway, classifyGatewayError } from "../src/gateway.js";
+import { classifyError } from "../src/error-classifier.js";
+import { ProviderGateway } from "../src/gateway.js";
 import type { Provider, StreamEvent, StreamOptions } from "../src/types.js";
 
 const streamEvents = async (gateway: ProviderGateway): Promise<StreamEvent[]> => {
@@ -332,11 +333,12 @@ describe("ProviderGateway model fallback", () => {
     expect(events.find((event) => event.type === "text_delta")?.text).toBe("4321");
   });
 
-  it("classifies errors into timeout/rate_limit/auth/server", () => {
-    expect(classifyGatewayError("request timed out after 10ms")).toBe("timeout");
-    expect(classifyGatewayError("HTTP 429 from provider")).toBe("rate_limit");
-    expect(classifyGatewayError("401 unauthorized")).toBe("auth");
-    expect(classifyGatewayError("something else")).toBe("server");
+  it("classifies errors by reason and retryability", () => {
+    expect(classifyError(new Error("request timed out after 10ms")).reason).toBe("timeout");
+    expect(classifyError(new Error("HTTP 429 from provider")).reason).toBe("rate_limit");
+    expect(classifyError(new Error("401 unauthorized")).reason).toBe("auth_failure");
+    expect(classifyError(new Error("something else")).reason).toBe("unknown");
+    expect(classifyError(new Error("context length exceeded")).reason).toBe("context_length_exceeded");
   });
 
   it("returns provider unavailable error when no attempts can be built", async () => {

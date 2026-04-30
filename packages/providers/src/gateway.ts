@@ -1,6 +1,11 @@
 import type { Metrics } from "@hairyclaw/observability";
 import type { AuthProfile, AuthProfileManager } from "./auth-profiles.js";
+import { CircuitBreakerRegistry } from "./circuit-breaker.js";
+import type { CircuitBreakerOptions } from "./circuit-breaker.js";
+import { classifyError } from "./error-classifier.js";
 import { ModelRouter } from "./router.js";
+import { RateLimitTracker } from "./rate-limit-tracker.js";
+import type { RateLimitSnapshot } from "./rate-limit-tracker.js";
 import type {
   Provider,
   ProviderMessage,
@@ -10,11 +15,19 @@ import type {
   StreamOptions,
 } from "./types.js";
 
+export type CredentialRefresher = (
+  profile: AuthProfile,
+) => Promise<{ credential: string; expiresAt?: number; refreshToken?: string } | null>;
+
 interface ProviderGatewayOptions {
   providers: Provider[];
   routingConfig: RoutingConfig;
   metrics: Metrics;
   authProfiles?: AuthProfileManager;
+  circuitBreaker?: CircuitBreakerOptions;
+  credentialRefresher?: CredentialRefresher;
+  /** Requests-remaining threshold below which a provider is considered exhausted (default: 5) */
+  rateLimitExhaustionThreshold?: number;
 }
 
 interface StreamAttempt {
@@ -25,35 +38,20 @@ interface StreamAttempt {
 
 const DEFAULT_TIMEOUT_MS = 120_000;
 
-const envVarForProvider = (provider: string): string | null => {
-  if (provider === "anthropic") return "ANTHROPIC_API_KEY";
-  if (provider === "openrouter") return "OPENROUTER_API_KEY";
-  if (provider === "gemini") return "GEMINI_API_KEY";
-  return null;
-};
-
-export const classifyGatewayError = (
-  error: unknown,
-): "timeout" | "rate_limit" | "auth" | "server" => {
-  const msg = error instanceof Error ? error.message : String(error);
-  const lower = msg.toLowerCase();
-  if (lower.includes("timeout") || lower.includes("timed out") || lower.includes("aborted")) {
-    return "timeout";
-  }
-  if (lower.includes("429") || lower.includes("rate")) return "rate_limit";
-  if (lower.includes("401") || lower.includes("403") || lower.includes("auth")) return "auth";
-  return "server";
-};
 
 export class ProviderGateway {
   private readonly providers = new Map<string, Provider>();
   private readonly router: ModelRouter;
+  private readonly circuits: CircuitBreakerRegistry;
+  private readonly rateLimits: RateLimitTracker;
 
   constructor(private readonly opts: ProviderGatewayOptions) {
     for (const provider of opts.providers) {
       this.providers.set(provider.name, provider);
     }
     this.router = new ModelRouter(opts.routingConfig);
+    this.circuits = new CircuitBreakerRegistry(opts.circuitBreaker);
+    this.rateLimits = new RateLimitTracker(opts.rateLimitExhaustionThreshold);
   }
 
   async *stream(
@@ -69,8 +67,15 @@ export class ProviderGateway {
     }
 
     const failures: string[] = [];
+    const queue = [...attempts];
+    const refreshedProfiles = new Set<string>();
+    const seenCredentials = new Set<string>();
+    let qi = 0;
+    let totalRefreshes = 0;
+    const MAX_REFRESHES = 2;
 
-    for (const attempt of attempts) {
+    while (qi < queue.length) {
+      const attempt = queue[qi++];
       const provider = this.providers.get(attempt.provider);
       const attemptLabel = `${attempt.provider}/${attempt.model}`;
 
@@ -79,35 +84,57 @@ export class ProviderGateway {
         continue;
       }
 
+      const circuit = this.circuits.get(attempt.provider);
+      if (!circuit.isCallAllowed()) {
+        failures.push(`${attemptLabel}: circuit open (${Math.ceil(circuit.remainingCooldownMs / 1000)}s remaining)`);
+        continue;
+      }
+
+      if (this.rateLimits.isExhausted(attempt.provider)) {
+        const snap = this.rateLimits.getSnapshot(attempt.provider);
+        const secsUntilReset = snap ? Math.ceil((snap.resetAtMs - Date.now()) / 1000) : 0;
+        failures.push(`${attemptLabel}: rate limit exhausted (resets in ${secsUntilReset}s)`);
+        continue;
+      }
+
       const profile = this.resolveAuthProfile(attempt.provider);
-      const needsProfile = this.opts.authProfiles && envVarForProvider(attempt.provider) !== null;
+      const needsProfile = !!this.opts.authProfiles;
       if (needsProfile && !profile) {
         failures.push(`${attemptLabel}: no auth profile available`);
         continue;
       }
 
+      if (profile?.credential) seenCredentials.add(profile.credential);
+
       let hadError = false;
       let errorReason = "unknown provider failure";
 
       try {
-        const stream = this.streamWithProfileCredential(attempt.provider, profile, () =>
-          provider.stream(messages, {
-            ...opts,
-            model: attempt.model,
-            timeoutMs: attempt.timeoutMs,
-          }),
-        );
+        const streamOpts = {
+          ...opts,
+          model: attempt.model,
+          timeoutMs: attempt.timeoutMs,
+          ...(profile?.type === "api_key" ? { credential: profile.credential } : {}),
+        };
 
-        for await (const event of this.streamWithTimeout(stream, attempt.timeoutMs)) {
+        for await (const event of this.streamWithTimeout(provider.stream(messages, streamOpts), attempt.timeoutMs)) {
           if (event.type === "error") {
             hadError = true;
-            errorReason = event.error ?? "provider returned error";
+            errorReason = this.sanitizeErrorMessage(event.error ?? "provider returned error", ...seenCredentials);
             this.opts.metrics.increment("llm_requests", 1, {
               provider: attempt.provider,
               model: attempt.model,
               status: "error",
             });
             break;
+          }
+
+          // Consume rate limit headers — update tracker, don't forward to caller
+          if (event.type === "rate_limit_headers") {
+            if (event.rateLimitRemaining !== undefined && event.rateLimitResetAtMs !== undefined) {
+              this.rateLimits.update(attempt.provider, event.rateLimitRemaining, event.rateLimitResetAtMs);
+            }
+            continue;
           }
 
           if (event.type === "usage" && event.usage) {
@@ -129,17 +156,57 @@ export class ProviderGateway {
         }
       } catch (error: unknown) {
         hadError = true;
-        errorReason = error instanceof Error ? error.message : String(error);
+        const raw = error instanceof Error ? error.message : String(error);
+        errorReason = this.sanitizeErrorMessage(raw, ...seenCredentials);
       }
 
       if (hadError) {
+        const classified = classifyError(new Error(errorReason));
+
+        // Surface context-length errors with a detectable prefix so the agent
+        // loop can trigger compression and retry instead of failing hard.
+        if (classified.reason === "context_length_exceeded") {
+          yield { type: "error", error: `context_length_exceeded: ${errorReason}` };
+          return;
+        }
+
+        // On auth failure, attempt credential refresh once per profile (global cap: MAX_REFRESHES)
+        if (
+          classified.reason === "auth_failure" &&
+          profile &&
+          profile.refreshToken &&
+          this.opts.credentialRefresher &&
+          this.opts.authProfiles &&
+          !refreshedProfiles.has(profile.id) &&
+          totalRefreshes < MAX_REFRESHES
+        ) {
+          const refreshed = await this.opts.credentialRefresher(profile).catch(() => null);
+          if (refreshed) {
+            const applied = this.opts.authProfiles.refreshCredential(
+              profile.id,
+              refreshed.credential,
+              refreshed.expiresAt,
+              refreshed.refreshToken,
+            );
+            if (applied) {
+              seenCredentials.add(refreshed.credential);
+              refreshedProfiles.add(profile.id);
+              totalRefreshes++;
+              queue.splice(qi, 0, attempt); // retry this attempt immediately
+              continue;
+            }
+          }
+        }
+
+        circuit.recordFailure();
         failures.push(`${attemptLabel}: ${errorReason}`);
         if (profile && this.opts.authProfiles) {
-          this.opts.authProfiles.reportFailure(profile.id, classifyGatewayError(errorReason));
+          this.opts.authProfiles.reportFailure(profile.id, classified.reason === "auth_failure" ? "auth" : classified.reason === "rate_limit" ? "rate_limit" : "server");
         }
         continue;
       }
 
+      circuit.recordSuccess();
       this.opts.metrics.increment("llm_requests", 1, {
         provider: attempt.provider,
         model: attempt.model,
@@ -163,6 +230,10 @@ export class ProviderGateway {
 
   getUsage(): ReturnType<Metrics["getAll"]> {
     return this.opts.metrics.getAll();
+  }
+
+  getRateLimitState(): Record<string, RateLimitSnapshot> {
+    return this.rateLimits.getAll();
   }
 
   private buildAttempts(
@@ -217,47 +288,25 @@ export class ProviderGateway {
     return deduped;
   }
 
+  private sanitizeErrorMessage(message: string, ...credentials: Array<string | undefined>): string {
+    // Redact before truncating so credentials near the boundary aren't partially exposed
+    let sanitized = message;
+    for (const cred of credentials) {
+      if (cred && cred.length > 4) {
+        sanitized = sanitized.split(cred).join("[REDACTED]");
+      }
+    }
+    sanitized = sanitized.replace(/Bearer\s+\S+/gi, "Bearer [REDACTED]");
+    sanitized = sanitized.replace(/sk-[A-Za-z0-9_-]{8,}/g, "[REDACTED]");
+    sanitized = sanitized.replace(/AIza[A-Za-z0-9_-]{35}/g, "[REDACTED]");
+    return sanitized.length > 500 ? `${sanitized.slice(0, 500)}...` : sanitized;
+  }
+
   private resolveAuthProfile(provider: string): AuthProfile | null {
     if (!this.opts.authProfiles) {
       return null;
     }
     return this.opts.authProfiles.getAvailable(provider);
-  }
-
-  private async *streamWithProfileCredential(
-    provider: string,
-    profile: AuthProfile | null,
-    factory: () => AsyncIterable<StreamEvent>,
-  ): AsyncIterable<StreamEvent> {
-    if (!profile || profile.type === "none") {
-      for await (const event of factory()) {
-        yield event;
-      }
-      return;
-    }
-
-    const envVar = envVarForProvider(provider);
-    if (!envVar) {
-      for await (const event of factory()) {
-        yield event;
-      }
-      return;
-    }
-
-    const previous = process.env[envVar];
-    process.env[envVar] = profile.credential;
-
-    try {
-      for await (const event of factory()) {
-        yield event;
-      }
-    } finally {
-      if (previous === undefined) {
-        delete process.env[envVar];
-      } else {
-        process.env[envVar] = previous;
-      }
-    }
   }
 
   private async *streamWithTimeout(

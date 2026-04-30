@@ -20,7 +20,8 @@ export interface StreamEvent {
     | "thinking"
     | "usage"
     | "stop"
-    | "error";
+    | "error"
+    | "rate_limit_headers";
   text?: string;
   toolCallId?: string;
   toolName?: string;
@@ -28,6 +29,9 @@ export interface StreamEvent {
   usage?: { input: number; output: number; costUsd: number };
   reason?: string;
   error?: string;
+  /** Populated on rate_limit_headers events — used by gateway for preemptive routing */
+  rateLimitRemaining?: number;
+  rateLimitResetAtMs?: number;
 }
 
 export interface ToolDefinition {
@@ -44,6 +48,8 @@ export interface StreamOptions {
   systemPrompt?: string;
   thinkingLevel?: "off" | "low" | "medium" | "high";
   timeoutMs?: number;
+  /** Injected by gateway for profile-based auth — takes precedence over env var */
+  credential?: string;
 }
 
 export interface ModelInfo {

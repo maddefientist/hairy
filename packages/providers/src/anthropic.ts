@@ -103,8 +103,36 @@ interface AnthropicResponse {
   id?: string;
   content?: AnthropicContentBlock[];
   stop_reason?: "end_turn" | "tool_use" | "max_tokens" | "stop_sequence";
-  usage?: { input_tokens?: number; output_tokens?: number };
+  usage?: {
+    input_tokens?: number;
+    output_tokens?: number;
+    cache_creation_input_tokens?: number;
+    cache_read_input_tokens?: number;
+  };
 }
+
+const PROMPT_CACHE_WINDOW = 3;
+
+/** Mark a rolling cache boundary so everything before the last N messages is cached */
+const withRollingCacheControl = (
+  messages: Array<{ role: "user" | "assistant"; content: unknown }>,
+): Array<{ role: "user" | "assistant"; content: unknown }> => {
+  if (messages.length <= PROMPT_CACHE_WINDOW) return messages;
+
+  const result = messages.map((m) => ({ ...m }));
+  const boundaryIdx = result.length - PROMPT_CACHE_WINDOW - 1;
+  const msg = result[boundaryIdx];
+
+  if (typeof msg.content === "string") {
+    msg.content = [{ type: "text", text: msg.content, cache_control: { type: "ephemeral" } }];
+  } else if (Array.isArray(msg.content) && (msg.content as unknown[]).length > 0) {
+    const blocks = [...(msg.content as Array<Record<string, unknown>>)];
+    blocks[blocks.length - 1] = { ...blocks[blocks.length - 1], cache_control: { type: "ephemeral" } };
+    msg.content = blocks;
+  }
+
+  return result;
+};
 
 export const createAnthropicProvider = (opts: AnthropicOptions = {}): Provider => {
   const baseUrl = opts.baseUrl ?? "https://api.anthropic.com/v1";
@@ -118,18 +146,23 @@ export const createAnthropicProvider = (opts: AnthropicOptions = {}): Provider =
       messages: ProviderMessage[],
       streamOpts: StreamOptions,
     ): AsyncIterable<StreamEvent> {
-      const apiKey = opts.apiKey ?? process.env.ANTHROPIC_API_KEY;
+      const apiKey = streamOpts.credential ?? opts.apiKey ?? process.env.ANTHROPIC_API_KEY;
       if (!apiKey) {
         yield { type: "error", error: "ANTHROPIC_API_KEY is missing" };
         return;
       }
 
+      // System prompt as array enables prompt caching
+      const systemBlock = streamOpts.systemPrompt
+        ? [{ type: "text", text: streamOpts.systemPrompt, cache_control: { type: "ephemeral" } }]
+        : undefined;
+
       const body: Record<string, unknown> = {
         model: streamOpts.model,
         max_tokens: streamOpts.maxTokens ?? 4096,
         temperature: streamOpts.temperature,
-        system: streamOpts.systemPrompt,
-        messages: toAnthropicMessages(messages),
+        system: systemBlock ?? streamOpts.systemPrompt,
+        messages: withRollingCacheControl(toAnthropicMessages(messages)),
       };
 
       // Include tools if provided
@@ -155,6 +188,7 @@ export const createAnthropicProvider = (opts: AnthropicOptions = {}): Provider =
             "content-type": "application/json",
             "x-api-key": apiKey,
             "anthropic-version": "2023-06-01",
+            "anthropic-beta": "prompt-caching-2024-07-31",
           },
           body: JSON.stringify(body),
           signal: AbortSignal.timeout(timeoutMs),
@@ -176,23 +210,38 @@ export const createAnthropicProvider = (opts: AnthropicOptions = {}): Provider =
 
       if (!response.ok) {
         const errorBody = await response.text().catch(() => "unknown");
-        yield {
-          type: "error",
-          error: `anthropic ${response.status}: ${errorBody}`,
-        };
+        if (response.status === 429) {
+          const retryAfter = response.headers?.get?.("retry-after");
+          const suffix = retryAfter ? ` retry_after:${retryAfter}` : "";
+          yield { type: "error", error: `HTTP 429 from provider${suffix}` };
+        } else {
+          yield { type: "error", error: `anthropic ${response.status}: ${errorBody}` };
+        }
         return;
+      }
+
+      const rlRemaining = response.headers?.get?.("anthropic-ratelimit-requests-remaining");
+      const rlReset = response.headers?.get?.("anthropic-ratelimit-requests-reset");
+      if (rlRemaining && rlReset) {
+        const remaining = parseInt(rlRemaining, 10);
+        const resetAtMs = new Date(rlReset).getTime();
+        if (!isNaN(remaining) && !isNaN(resetAtMs)) {
+          yield { type: "rate_limit_headers", rateLimitRemaining: remaining, rateLimitResetAtMs: resetAtMs };
+        }
       }
 
       const payload = (await response.json()) as AnthropicResponse;
 
-      // Emit usage
+      // Emit usage — cache_read tokens are charged at 10% of normal input rate
       if (payload.usage) {
+        const cacheRead = payload.usage.cache_read_input_tokens ?? 0;
+        const cacheCreate = payload.usage.cache_creation_input_tokens ?? 0;
         yield {
           type: "usage",
           usage: {
-            input: payload.usage.input_tokens ?? 0,
+            input: (payload.usage.input_tokens ?? 0) + cacheCreate + cacheRead,
             output: payload.usage.output_tokens ?? 0,
-            costUsd: 0, // TODO: calculate from model pricing
+            costUsd: 0,
           },
         };
       }
