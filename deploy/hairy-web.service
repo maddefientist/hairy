@@ -1,0 +1,17 @@
+[Unit]
+Description=Hairy Web GUI
+After=network.target hairyclaw.service
+Wants=hairyclaw.service
+
+[Service]
+Type=simple
+WorkingDirectory=%h/hairy
+EnvironmentFile=%h/hairy/.env
+Environment=AGENT_DB_PATH=%h/hairy/data/agent.db
+Environment=WEB_PORT=3000
+ExecStart=/usr/bin/node apps/hairy-web/dist/index.js
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target
