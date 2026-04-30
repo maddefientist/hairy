@@ -11,8 +11,19 @@
  */
 
 import type { HairyClawLogger, Metrics } from "@hairyclaw/observability";
+import type { IterationBudget } from "./iteration-budget.js";
 import type { PluginContext, PluginRunner } from "./plugin.js";
 import type { ToolCallRecord } from "./types.js";
+
+/** Structural interface — accepts ContextCompressor without a circular dep on @hairyclaw/memory */
+export interface CompressorLike {
+  pressureLevel?(messages: AgentLoopMessage[], contextWindow: number): number;
+  needsCompression(messages: AgentLoopMessage[], contextWindow: number): boolean;
+  compress(
+    messages: AgentLoopMessage[],
+    contextWindow: number,
+  ): Promise<{ messages: AgentLoopMessage[]; wasCompressed: boolean }>;
+}
 
 /** Minimal provider interface — just what the loop needs */
 export interface AgentLoopProvider {
@@ -25,8 +36,9 @@ export interface AgentLoopMessage {
 }
 
 export interface AgentLoopContent {
-  type: "text" | "tool_call" | "tool_result" | "thinking";
+  type: "text" | "image" | "tool_call" | "tool_result" | "thinking";
   text?: string;
+  image?: { data: Buffer; mimeType: string } | { url: string };
   toolCall?: { id: string; name: string; args: unknown };
   toolResult?: { id: string; content: string; isError?: boolean };
 }
@@ -56,7 +68,8 @@ export interface AgentLoopEvent {
     | "thinking"
     | "usage"
     | "stop"
-    | "error";
+    | "error"
+    | "rate_limit_headers";
   text?: string;
   toolCallId?: string;
   toolName?: string;
@@ -64,6 +77,8 @@ export interface AgentLoopEvent {
   usage?: { input: number; output: number; costUsd: number };
   reason?: string;
   error?: string;
+  rateLimitRemaining?: number;
+  rateLimitResetAtMs?: number;
 }
 
 /** Tool executor function — provided by the host */
@@ -83,6 +98,12 @@ export interface AgentLoopOptions {
   pluginCtx?: PluginContext;
   /** Max tool-use round-trips before forcing stop (default: 10) */
   maxIterations?: number;
+  /** Per-agent iteration budget — takes precedence over maxIterations when provided */
+  budget?: IterationBudget;
+  /** Context compressor — compresses conversation before each LLM call when approaching limit */
+  compressor?: CompressorLike;
+  /** LLM context window size for compressor threshold calculation (default: 200_000) */
+  contextWindow?: number;
   /** Callback for each text chunk (for streaming to user) */
   onTextDelta?: (text: string) => void;
   /** Callback for tool execution start */
@@ -137,7 +158,36 @@ export const runAgentLoop = async (
   let iterations = 0;
 
   outer: for (let i = 0; i < maxIter; i++) {
+    // Check external budget first (overrides raw iteration counter)
+    if (opts.budget) {
+      if (!opts.budget.consume()) {
+        opts.logger.warn(
+          { used: opts.budget.used, max: opts.budget.maxTotal },
+          "agent loop iteration budget exhausted",
+        );
+        finalText =
+          "I reached my iteration budget. Here's what I have so far.";
+        break;
+      }
+    }
+
     iterations = i + 1;
+
+    // Compress context before calling provider if approaching window limit
+    if (opts.compressor) {
+      const ctxWindow = opts.contextWindow ?? 200_000;
+      const pressure = opts.compressor.pressureLevel?.(conversation, ctxWindow) ?? 0;
+      if (pressure >= 0.85) {
+        opts.logger.warn({ pressureLevel: pressure.toFixed(2) }, "context pressure high — may hit limit soon");
+      }
+      if (opts.compressor.needsCompression(conversation, ctxWindow)) {
+        const compressed = await opts.compressor.compress(conversation, ctxWindow);
+        if (compressed.wasCompressed) {
+          conversation.splice(0, conversation.length, ...compressed.messages);
+          opts.metrics?.increment("context_compressions", 1);
+        }
+      }
+    }
 
     let retryAfterModel = false;
     let turnText = "";
@@ -230,6 +280,22 @@ export const runAgentLoop = async (
 
       if (hadModelError) {
         opts.logger.error({ error: modelErrorMessage }, "agent loop provider error");
+
+        // Context-length exceeded: force compression and retry this iteration
+        if (
+          opts.compressor &&
+          modelErrorMessage.startsWith("context_length_exceeded:")
+        ) {
+          opts.logger.warn("context length exceeded — forcing compression before retry");
+          const ctxWindow = opts.contextWindow ?? 200_000;
+          const compressed = await opts.compressor.compress(conversation, ctxWindow);
+          if (compressed.wasCompressed) {
+            conversation.splice(0, conversation.length, ...compressed.messages);
+            opts.metrics?.increment("context_compressions", 1);
+            continue; // retry the stream with compressed context
+          }
+        }
+
         if (opts.plugins && pluginCtx) {
           const replacement = await opts.plugins.runOnModelError(
             new Error(modelErrorMessage),
@@ -251,7 +317,14 @@ export const runAgentLoop = async (
       turnText = textParts.join("");
 
       if (opts.plugins && pluginCtx) {
-        const afterModel = await opts.plugins.runAfterModel(turnText, [], pluginCtx);
+        const pendingAsRecords: ToolCallRecord[] = [...pendingCalls.values()].map((c) => ({
+          toolName: c.name,
+          args: {},
+          result: "",
+          isError: false,
+          durationMs: 0,
+        }));
+        const afterModel = await opts.plugins.runAfterModel(turnText, pendingAsRecords, pluginCtx);
         if (afterModel === null) {
           if (!retryAfterModel) {
             retryAfterModel = true;

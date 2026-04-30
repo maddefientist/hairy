@@ -1,3 +1,4 @@
+import { createReadStream } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { basename, dirname, extname, join } from "node:path";
 import type {
@@ -7,7 +8,7 @@ import type {
   MessageContent,
 } from "@hairyclaw/core";
 import type { HairyClawLogger as Logger } from "@hairyclaw/observability";
-import { Bot, type Context, GrammyError, HttpError } from "grammy";
+import { Bot, type Context, GrammyError, HttpError, InputFile } from "grammy";
 import { TelegramClient } from "telegram";
 import { NewMessage, type NewMessageEvent } from "telegram/events/index.js";
 import { StringSession } from "telegram/sessions/index.js";
@@ -714,6 +715,11 @@ export class TelegramAdapter extends BaseAdapter {
   // To re-enable streaming edits, restore this method from git history.
 
   async disconnect(): Promise<void> {
+    for (const interval of this.typingIntervals.values()) {
+      clearInterval(interval);
+    }
+    this.typingIntervals.clear();
+
     if (this.bot) {
       await this.bot.stop();
       this.bot = null;
@@ -748,7 +754,20 @@ export class TelegramAdapter extends BaseAdapter {
         }
 
         for (const att of response.attachments ?? []) {
-          if (att.url) {
+          const fileSource = ((): InputFile | string | null => {
+            if (att.url) return att.url;
+            if (att.buffer) return new InputFile(att.buffer, "attachment.ogg");
+            if (att.path) return new InputFile(createReadStream(att.path));
+            return null;
+          })();
+
+          if (!fileSource) continue;
+
+          if (att.mimeType?.startsWith("audio/")) {
+            await this.bot.api.sendVoice(chatId, fileSource);
+          } else if (att.mimeType?.startsWith("video/")) {
+            await this.bot.api.sendVideo(chatId, fileSource);
+          } else if (att.url) {
             await this.bot.api.sendDocument(chatId, att.url);
           }
         }

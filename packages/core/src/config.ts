@@ -8,6 +8,7 @@ const providerSchema = z.object({
   default_model: z.string().min(1),
   api_key: z.string().optional(),
   base_url: z.string().url().optional(),
+  context_window: z.number().int().positive().optional(),
   model_fallback_chain: z.array(z.string().min(1)).optional(),
 });
 
@@ -108,7 +109,7 @@ const executorSchema = z.object({
   tools: z.array(z.string()).default(["bash", "read", "write", "edit", "web_search", "web_fetch"]),
   temperature: z.number().min(0).max(2).default(0.1),
   max_tokens: z.number().int().positive().default(4096),
-  max_iterations: z.number().int().positive().default(5),
+  max_iterations: z.number().int().positive().default(20),
   system_prompt: z.string().default(""),
 });
 

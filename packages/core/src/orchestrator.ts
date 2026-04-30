@@ -272,11 +272,13 @@ export class Orchestrator {
             );
             continue;
           }
-
-          await this.deps.plugins.runOnRunStart(pluginCtx);
         }
 
         try {
+          if (this.deps.plugins) {
+            await this.deps.plugins.runOnRunStart(pluginCtx);
+          }
+
           const response = await this.deps.handleRun(effectiveMessage, trace.traceId, pluginCtx);
           const runResult: RunResult = {
             traceId: trace.traceId,

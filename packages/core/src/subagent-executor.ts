@@ -19,6 +19,7 @@ import type {
   ToolExecutor,
 } from "./agent-loop.js";
 import { runAgentLoop } from "./agent-loop.js";
+import { createSubagentBudget } from "./iteration-budget.js";
 import {
   type ExecutionMetadata,
   createChildExecutionMetadata,
@@ -309,6 +310,7 @@ export class SubagentExecutor {
         executor: opts.executor,
         logger: opts.logger,
         maxIterations: this.config.maxIterations,
+        budget: createSubagentBudget(this.config.maxIterations),
         streamOpts: {
           model: opts.model,
           systemPrompt: opts.systemPrompt,

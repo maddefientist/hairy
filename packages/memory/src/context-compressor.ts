@@ -78,6 +78,11 @@ export class ContextCompressor {
     return total;
   }
 
+  /** 0–1 fraction of context window used (ignores cooldown — raw pressure) */
+  pressureLevel(messages: AgentLoopMessage[], contextWindow: number): number {
+    return this.estimateTokens(messages) / contextWindow;
+  }
+
   /** Check if compression is needed */
   needsCompression(messages: AgentLoopMessage[], contextWindow: number): boolean {
     const now = Date.now();

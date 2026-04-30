@@ -1,7 +1,7 @@
 import { execSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import {
   type ChannelAdapter,
   DeliveryQueue,
@@ -12,6 +12,7 @@ import {
   createWhatsAppAdapter,
 } from "@hairyclaw/channels";
 import {
+  type AgentLoopContent,
   type AgentLoopMessage,
   type AgentLoopStreamOptions,
   type AgentLoopToolDef,
@@ -65,6 +66,11 @@ import {
   createPdfExtractTool,
   createReadTool,
   createReminderTool,
+  createSshExecTool,
+  createSubAgentTool,
+  createChainTool,
+  createVideoDownloadTool,
+  createVideoExtractTool,
   createWebFetchTool,
   createWebSearchTool,
   createWriteTool,
@@ -72,6 +78,7 @@ import {
 } from "@hairyclaw/tools";
 import { z } from "zod";
 import { loadHairyClawConfig } from "./config.js";
+import { AgentDatabase } from "./database.js";
 import { HealthServer } from "./health.js";
 import { buildSystemPrompt } from "./identity.js";
 
@@ -95,7 +102,12 @@ const buildProviders = (config: Awaited<ReturnType<typeof loadHairyClawConfig>>)
   }
 
   if (config.providers.ollama.enabled) {
-    providers.push(createOllamaProvider({ baseUrl: config.providers.ollama.baseUrl }));
+    providers.push(
+      createOllamaProvider({
+        baseUrl: config.providers.ollama.baseUrl,
+        contextWindow: config.providers.ollama.contextWindow,
+      }),
+    );
   }
 
   return providers;
@@ -657,6 +669,46 @@ const runMaintenanceCommand = async (command: string, deps: MaintenanceDeps): Pr
   deps.logger.warn({ command }, "unknown maintenance command");
 };
 
+const transcribeAudioFile = async (filePath: string, mimeType: string): Promise<string | null> => {
+  const groqKey = process.env.GROQ_API_KEY;
+  const openaiKey = process.env.VOICE_TOOLS_OPENAI_KEY;
+  if (!groqKey && !openaiKey) return null;
+
+  try {
+    const fileBuffer = await readFile(filePath);
+    const form = new FormData();
+    form.append("file", new Blob([fileBuffer], { type: mimeType }), basename(filePath));
+
+    if (groqKey) {
+      form.append("model", "whisper-large-v3-turbo");
+      const res = await fetch("https://api.groq.com/openai/v1/audio/transcriptions", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${groqKey}` },
+        body: form,
+      });
+      if (res.ok) {
+        const data = (await res.json()) as { text?: string };
+        return data.text ?? null;
+      }
+    } else if (openaiKey) {
+      form.append("model", "whisper-1");
+      const res = await fetch("https://api.openai.com/v1/audio/transcriptions", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${openaiKey}` },
+        body: form,
+      });
+      if (res.ok) {
+        const data = (await res.json()) as { text?: string };
+        return data.text ?? null;
+      }
+    }
+  } catch {
+    // transcription failed — fall through
+  }
+
+  return null;
+};
+
 const main = async (): Promise<void> => {
   const config = await loadHairyClawConfig();
   const metrics = new Metrics();
@@ -692,6 +744,9 @@ const main = async (): Promise<void> => {
     },
   });
   await scheduler.load();
+
+  // ── Database ─────────────────────────────────────────────────────────────
+  const agentDb = new AgentDatabase(config.dataDir);
 
   // ── Memory ───────────────────────────────────────────────────────────────
   const conversation = new ConversationMemory({
@@ -755,6 +810,12 @@ const main = async (): Promise<void> => {
   registry.register(createBrowserTool());
   registry.register(createReminderTool({ agentName: config.agentName }));
   registry.register(createPdfExtractTool());
+  const sshAllowedHosts = process.env.SSH_ALLOWED_HOSTS
+    ? process.env.SSH_ALLOWED_HOSTS.split(",").map((h) => h.trim()).filter(Boolean)
+    : [];
+  registry.register(createSshExecTool({ allowedHosts: sshAllowedHosts }));
+  registry.register(createVideoDownloadTool());
+  registry.register(createVideoExtractTool());
   registry.register(createMemoryRecallTool(memoryBackend));
   registry.register(createMemoryIngestTool(memoryBackend));
   registry.register(createIdentityEvolveTool());
@@ -926,6 +987,71 @@ const main = async (): Promise<void> => {
       "orchestrator/executor mode configured",
     );
   } else {
+    const primarySpec = parseModelSpec(activePrimaryModel, routing.defaultProvider);
+    const spawnGateway = buildGatewayForModel(primarySpec.provider, primarySpec.model);
+    const spawnTools = registry.list().filter((t) =>
+      ["bash", "read", "write", "edit", "web_search", "web_fetch", "pdf-extract", "video_download", "video_extract"].includes(t.name),
+    );
+    const spawnAgentTool = createSubAgentTool({
+      name: "spawn_agent",
+      description:
+        "Spawn an autonomous sub-agent to complete a self-contained task. " +
+        "Use this when a task requires many sequential steps, file operations, or extended research " +
+        "that would clutter the main conversation. Returns the agent's final answer.",
+      systemPrompt: "You are a focused task executor. Complete the given task step by step using the available tools. Be concise and return only the final result.",
+      provider: {
+        stream: (msgs, streamOpts) =>
+          spawnGateway.stream(msgs, { ...streamOpts, model: primarySpec.model }),
+      },
+      tools: spawnTools,
+      maxIterations: 25,
+      timeoutMs: 180_000,
+      logger,
+    });
+    registry.register(spawnAgentTool);
+
+    // ── Agent chains (build / design / document / implement / qlt) ───────────
+    const chainTools = registry.list().filter((t) =>
+      ["bash", "read", "write", "edit", "web_search", "web_fetch", "pdf-extract",
+       "video_download", "video_extract", "memory_recall", "memory_ingest"].includes(t.name),
+    );
+    const chainTool = createChainTool({
+      defaultModel: primarySpec.model,
+      providerFactory: (model, thinking) => ({
+        stream: (msgs, streamOpts) =>
+          buildGatewayForModel(primarySpec.provider, model).stream(msgs, {
+            ...streamOpts,
+            model,
+            thinkingLevel: thinking,
+          }),
+      }),
+      tools: chainTools,
+      logger,
+      modelOverrides: {
+        // build: scout+reviewer on glm, planner+coder on kimi
+        "build.scout":    "glm-5.1:cloud",
+        "build.planner":  "kimi-k2.6:cloud",
+        "build.coder":    "kimi-k2.6:cloud",
+        "build.reviewer": "glm-5.1:cloud",
+        // design: scout+reviewer on glm/gemma, planner+designer on kimi
+        "design.scout":    "glm-5.1:cloud",
+        "design.planner":  "kimi-k2.6:cloud",
+        "design.designer": "kimi-k2.6:cloud",
+        "design.reviewer": "gemma4:31b-cloud",
+        // document: glm for structure, gemma for prose
+        "document.planner":  "glm-5.1:cloud",
+        "document.writer":   "gemma4:31b-cloud",
+        "document.reviewer": "glm-5.1:cloud",
+        // implement: kimi codes, glm reviews
+        "implement.coder":    "kimi-k2.6:cloud",
+        "implement.reviewer": "glm-5.1:cloud",
+        // qlt: kimi analyses, glm reports
+        "qlt.analyst":  "kimi-k2.6:cloud",
+        "qlt.reviewer": "glm-5.1:cloud",
+      },
+    });
+    registry.register(chainTool);
+
     toolDefs = registry.list().map(toolToDefinition);
   }
 
@@ -1252,8 +1378,45 @@ const main = async (): Promise<void> => {
         logger.debug({ versionId: saved.id }, "new prompt version saved");
       }
 
+      const userContent: AgentLoopContent[] = [];
+      if (message.content.text) {
+        userContent.push({ type: "text", text: message.content.text });
+      }
+      for (const img of message.content.images ?? []) {
+        if (img.buffer) {
+          userContent.push({ type: "image", image: { data: img.buffer, mimeType: img.mimeType } });
+        } else if (img.url) {
+          userContent.push({ type: "image", image: { url: img.url } });
+        }
+      }
+      for (const vid of message.content.video ?? []) {
+        const ref = vid.path ?? vid.url ?? "video";
+        userContent.push({ type: "text", text: `[video attached: ${ref}]` });
+      }
+      for (const aud of message.content.audio ?? []) {
+        if (aud.path) {
+          const transcript = await transcribeAudioFile(aud.path, aud.mimeType);
+          if (transcript) {
+            userContent.push({ type: "text", text: `[Voice message: ${transcript}]` });
+          } else {
+            userContent.push({ type: "text", text: "[Voice message received — set GROQ_API_KEY or VOICE_TOOLS_OPENAI_KEY to enable transcription]" });
+          }
+        } else if (aud.url) {
+          userContent.push({ type: "text", text: `[audio attached: ${aud.url}]` });
+        }
+      }
+      if (userContent.length === 0) {
+        userContent.push({ type: "text", text: "" });
+      }
+      const dbSession = agentDb.getOrCreateSession(message.channelId, message.channelType);
+      const recentHistory = agentDb.getRecentMessages(message.channelId, 50);
+      const historyMessages: AgentLoopMessage[] = recentHistory.map((m) => ({
+        role: m.role,
+        content: [{ type: "text" as const, text: m.content }],
+      }));
       const loopMessages: AgentLoopMessage[] = [
-        { role: "user", content: [{ type: "text", text: message.content.text ?? "" }] },
+        ...historyMessages,
+        { role: "user", content: userContent },
       ];
 
       let streamHandle: Awaited<
@@ -1307,6 +1470,7 @@ const main = async (): Promise<void> => {
             }),
         },
         executor: async (name, args, _callId) => {
+          const t0 = Date.now();
           const execution = await registry.execute(name, args, {
             traceId,
             cwd: process.cwd(),
@@ -1314,6 +1478,15 @@ const main = async (): Promise<void> => {
             logger,
             channelId: message.channelId,
           });
+          agentDb.logToolExecution(
+            traceId,
+            message.channelId,
+            name,
+            args,
+            execution.content,
+            Date.now() - t0,
+            execution.isError ?? false,
+          );
           return { content: execution.content, isError: execution.isError ?? false };
         },
         streamOpts: {
@@ -1329,6 +1502,7 @@ const main = async (): Promise<void> => {
         plugins: pluginRunner,
         pluginCtx,
         maxIterations: config.maxIterationsPerRun,
+        contextWindow: config.providers.ollama.contextWindow ?? config.maxContextTokens,
         onTextDelta: (delta) => {
           if (!streamHandle) {
             return;
@@ -1351,6 +1525,11 @@ const main = async (): Promise<void> => {
       const prepared = await pluginRunner.runBeforeSend({ text: responseText }, pluginCtx);
       const response = prepared ?? { text: "" };
       const durationMs = Date.now() - startedAt;
+
+      // Persist this turn to SQLite
+      const userText = message.content.text ?? "";
+      if (userText) agentDb.saveMessage(dbSession, message.channelId, "user", userText);
+      agentDb.saveMessage(dbSession, message.channelId, "assistant", responseText);
 
       const evalScore = evalHarness.score({
         traceId,

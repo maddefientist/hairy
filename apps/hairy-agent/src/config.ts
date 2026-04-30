@@ -64,6 +64,7 @@ interface ProviderRuntimeConfig {
   defaultModel: string;
   apiKey?: string;
   baseUrl?: string;
+  contextWindow?: number;
 }
 
 export interface OrchestratorModeConfig {
@@ -88,6 +89,7 @@ export interface HairyClawRuntimeConfig {
   healthPort: number;
   configDir: string;
   maxIterationsPerRun: number;
+  maxContextTokens: number;
   agentMode: "unified" | "orchestrator";
   orchestratorConfig: OrchestratorModeConfig;
   executorConfig: ExecutorModeConfig;
@@ -232,6 +234,7 @@ export const loadHairyClawConfig = async (): Promise<HairyClawRuntimeConfig> => 
       defaultModel: runtime.ollama.model ?? base.providers.ollama?.default_model ?? "llama3.2",
       baseUrl:
         runtime.ollama.baseUrl ?? base.providers.ollama?.base_url ?? "http://localhost:11434",
+      contextWindow: base.providers.ollama?.context_window,
     },
   };
 
@@ -255,6 +258,7 @@ export const loadHairyClawConfig = async (): Promise<HairyClawRuntimeConfig> => 
     healthPort: base.health.port,
     configDir,
     maxIterationsPerRun: base.agent.max_iterations_per_run,
+    maxContextTokens: base.agent.max_context_tokens,
     agentMode:
       (process.env.AGENT_MODE as "unified" | "orchestrator" | undefined) ??
       base.agent.mode ??
