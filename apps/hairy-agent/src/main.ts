@@ -820,6 +820,11 @@ const main = async (): Promise<void> => {
   registry.register(createMemoryIngestTool(memoryBackend));
   registry.register(createIdentityEvolveTool());
 
+  if (process.env.CORRA_ENABLED === "1") {
+    logger.info("CORRA_ENABLED — registering Corra correspondent tools");
+    // Corra tools + schedules are registered here by later phases (1-5).
+  }
+
   // Tool defs are finalized after providers are set up (orchestrator mode needs buildGatewayForModel).
   // Placeholder — populated below after provider setup.
   let toolDefs: AgentLoopToolDef[] = [];

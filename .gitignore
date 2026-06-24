@@ -21,3 +21,5 @@ dist/
 # Deployment-specific
 config/local.toml
 config/*.bak*
+config/*.local.toml
+deploy/corra.env

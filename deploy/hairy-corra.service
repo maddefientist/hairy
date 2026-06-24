@@ -1,0 +1,16 @@
+[Unit]
+Description=Hairy — Corra research correspondent
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=moni
+WorkingDirectory=/home/moni/hairy
+EnvironmentFile=/home/moni/corra.env
+ExecStart=/usr/bin/node /home/moni/hairy/apps/hairy-agent/dist/main.js
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
