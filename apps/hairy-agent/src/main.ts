@@ -79,6 +79,7 @@ import {
   createWebFetchTool,
   createWebSearchTool,
   createWriteTool,
+  createXDraftQueueTool,
   setReminderCallback,
 } from "@hairyclaw/tools";
 import { z } from "zod";
@@ -847,6 +848,7 @@ const main = async (): Promise<void> => {
     );
     registry.register(createInterestModelTool({ memory: memoryBackend }));
     registry.register(createDigestTool({ memory: memoryBackend }));
+    registry.register(createXDraftQueueTool({ n8nWebhookUrl: process.env.CORRA_X_N8N_WEBHOOK ?? "" }));
     // Runtime loops (IMAP poll + scoring/ping + digest crons) live in the late Corra runtime block below.
   }
 
@@ -1274,6 +1276,41 @@ const main = async (): Promise<void> => {
 
   const pluginRunner = new PluginRunner(runtimePlugins);
   const commandRouter = new CommandRouter(logger);
+
+  if (process.env.CORRA_ENABLED === "1") {
+    const corraOwnerId = process.env.CORRA_OWNER_CHAT_ID ?? "";
+    const corraCmdCtx = () => ({ traceId: "corra-cmd", cwd: process.cwd(), dataDir: config.dataDir, logger });
+    const corraOwnerOnly = (ctx: { senderId: string }): boolean => corraOwnerId !== "" && ctx.senderId === corraOwnerId;
+    const runQueue = async (action: string, id?: string, text?: string): Promise<string> => {
+      const res = await registry.execute("corra_x_queue", { action, id, text }, corraCmdCtx());
+      const parsed = JSON.parse(res.content) as { text?: string };
+      return parsed.text ?? res.content;
+    };
+    commandRouter.register({
+      name: "queue",
+      description: "List Corra's pending X drafts (owner only)",
+      handler: async (_args, ctx) => (corraOwnerOnly(ctx) ? runQueue("list") : null),
+    });
+    commandRouter.register({
+      name: "approve",
+      description: "Approve and post an X draft by id (owner only)",
+      handler: async (args, ctx) => (corraOwnerOnly(ctx) ? runQueue("approve", args.trim()) : null),
+    });
+    commandRouter.register({
+      name: "skip",
+      description: "Skip an X draft by id (owner only)",
+      handler: async (args, ctx) => (corraOwnerOnly(ctx) ? runQueue("skip", args.trim()) : null),
+    });
+    commandRouter.register({
+      name: "edit",
+      description: "Edit an X draft: /edit N new text (owner only)",
+      handler: async (args, ctx) => {
+        if (!corraOwnerOnly(ctx)) return null;
+        const [id, ...rest] = args.trim().split(/\s+/);
+        return runQueue("edit", id, rest.join(" "));
+      },
+    });
+  }
 
   const clearAllCooldowns = (): void => {
     for (const provider of providers) {
