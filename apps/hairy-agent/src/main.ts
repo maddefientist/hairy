@@ -1242,6 +1242,7 @@ const main = async (): Promise<void> => {
               if (score >= 0.6) {
                 await sendWithDeliveryQueue("telegram", ownerChat, { text: `📨 High-signal newsletter: "${it.subject}" — ${it.from}` });
               }
+              await registry.execute("corra_interest", { action: "subscribe", text: it.subject }, corraCtx);
             }
           } catch (err) {
             logger.error({ err }, "corra ingest/ping loop failed");

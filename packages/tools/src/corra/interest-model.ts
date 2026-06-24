@@ -30,6 +30,26 @@ export const applyReaction = (weights: Weights, topics: string[], signal: "usefu
   return next;
 };
 
+const STOP = new Set([
+  "the", "a", "an", "and", "or", "for", "to", "of", "in", "on", "your", "you",
+  "new", "with", "this", "that", "is", "are", "how", "why", "what", "from",
+  "weekly", "daily", "newsletter", "issue", "edition", "update", "updates",
+]);
+
+export const extractTopics = (subject: string): string[] => {
+  const words = (subject.toLowerCase().match(/[a-z0-9]{4,}/g) ?? []).filter((w) => !STOP.has(w));
+  return [...new Set(words)].slice(0, 5);
+};
+
+export const applySubscription = (weights: Weights, topics: string[], cap = 0.55, delta = 0.05): Weights => {
+  const next: Weights = { ...weights };
+  for (const t of topics) {
+    const cur = next[t] ?? 0;
+    next[t] = Math.min(cap, cur + delta);
+  }
+  return next;
+};
+
 const loadWeights = async (memory: MemoryBackend): Promise<Weights> => {
   const results = await memory.search(MEMORY_TAG, 3);
   for (const r of results) {
@@ -44,7 +64,7 @@ const loadWeights = async (memory: MemoryBackend): Promise<Weights> => {
 };
 
 const interestSchema = z.object({
-  action: z.enum(["score", "react"]),
+  action: z.enum(["score", "react", "subscribe"]),
   text: z.string().optional(),
   topics: z.array(z.string()).optional(),
   signal: z.enum(["useful", "noted", "wrong"]).optional(),
@@ -68,6 +88,15 @@ export const createInterestModelTool = (deps: InterestDeps): Tool => ({
     if (input.action === "score") {
       const score = scoreItem(input.text ?? "", weights);
       return { content: JSON.stringify({ score }), metadata: { score } };
+    }
+
+    if (input.action === "subscribe") {
+      const topics = extractTopics(input.text ?? "");
+      if (topics.length === 0) return { content: JSON.stringify({ subscribed: [] }) };
+      const updated = applySubscription(weights, topics);
+      await deps.memory.store(JSON.stringify({ type: "interest-model", weights: updated }), [MEMORY_TAG]);
+      ctx.logger.info({ topics }, "corra interest subscription prior applied");
+      return { content: JSON.stringify({ subscribed: topics }) };
     }
 
     const topics = input.topics ?? [];

@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { scoreItem, applyReaction } from "../../src/corra/interest-model.js";
+import { scoreItem, applyReaction, extractTopics, applySubscription } from "../../src/corra/interest-model.js";
 
 describe("interest model", () => {
   it("scores higher when topic weights match item text", () => {
@@ -19,5 +19,20 @@ describe("interest model", () => {
     expect(applyReaction({ "ai agents": 0.5 }, ["ai agents"], "noted")["ai agents"]).toBe(0.5);
     expect(applyReaction({ x: 0.95 }, ["x"], "useful").x).toBeLessThanOrEqual(1);
     expect(applyReaction({ x: 0.05 }, ["x"], "wrong").x).toBeGreaterThanOrEqual(0);
+  });
+});
+
+describe("subscription learning", () => {
+  it("extractTopics keeps meaningful words, drops stopwords/short words", () => {
+    const t = extractTopics("New AI agents weekly issue");
+    expect(t).toContain("agents");
+    expect(t).not.toContain("new");
+    expect(t).not.toContain("ai"); // too short (<4 chars)
+  });
+  it("applySubscription builds weight up to the cap, never above", () => {
+    let w: Record<string, number> = {};
+    for (let i = 0; i < 20; i++) w = applySubscription(w, ["agents"]);
+    expect(w.agents).toBeGreaterThan(0);
+    expect(w.agents).toBeLessThanOrEqual(0.55);
   });
 });
