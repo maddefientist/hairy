@@ -65,32 +65,52 @@ export const createEmailIngestTool = (deps: EmailIngestDeps): Tool => ({
       auth: { user: deps.imap.user, pass: deps.imap.password },
       logger: false,
     });
-    const ingested: NewsletterDigest[] = [];
     await client.connect();
+
+    // 1) Buffer raw message sources first. Do NOT await external services (hive)
+    //    inside the fetch stream — imapflow stalls if the connection is blocked
+    //    mid-fetch, which deadlocks the poll until the tool times out.
+    const raw: Array<{ uid: number; source: Buffer }> = [];
     const lock = await client.getMailboxLock("INBOX");
     try {
       for await (const msg of client.fetch({ seen: false }, { source: true, uid: true })) {
-        if (limit && ingested.length >= limit) break;
         if (!msg.source) continue;
-        const parsed = await simpleParser(msg.source);
-        const digest = parseNewsletter(parsed);
-        const dupes = await deps.memory.search(digest.messageId, 1);
-        if (dupes.some((d) => d.content.includes(digest.messageId))) {
-          await client.messageFlagsAdd(String(msg.uid), ["\\Seen"], { uid: true });
-          continue;
-        }
-        await deps.memory.store(JSON.stringify(digest), [
-          "corra:newsletter",
-          `from:${digest.from}`,
-          digest.listId ? `list:${digest.listId}` : "list:none",
-        ]);
-        ingested.push(digest);
-        await client.messageFlagsAdd(String(msg.uid), ["\\Seen"], { uid: true });
+        raw.push({ uid: msg.uid, source: msg.source });
+        if (limit && raw.length >= limit) break;
       }
     } finally {
       lock.release();
-      await client.logout();
     }
+
+    // 2) Process buffered messages off the IMAP stream: parse, dedup, store.
+    //    Hive failures degrade gracefully — a failed dedup is treated as "new",
+    //    a failed store leaves the message unseen so the next poll retries it.
+    const ingested: NewsletterDigest[] = [];
+    for (const m of raw) {
+      const digest = parseNewsletter(await simpleParser(m.source));
+      let isDuplicate = false;
+      try {
+        const dupes = await deps.memory.search(digest.messageId, 1);
+        isDuplicate = dupes.some((d) => d.content.includes(digest.messageId));
+      } catch (err) {
+        ctx.logger.warn({ err }, "corra dedup lookup failed; treating message as new");
+      }
+      if (!isDuplicate) {
+        try {
+          await deps.memory.store(JSON.stringify(digest), [
+            "corra:newsletter",
+            `from:${digest.from}`,
+            digest.listId ? `list:${digest.listId}` : "list:none",
+          ]);
+          ingested.push(digest);
+        } catch (err) {
+          ctx.logger.error({ err }, "corra store failed; leaving message unseen for retry");
+          continue;
+        }
+      }
+      await client.messageFlagsAdd(String(m.uid), ["\\Seen"], { uid: true });
+    }
+    await client.logout();
     ctx.logger.info({ count: ingested.length }, "corra ingest run");
     return {
       content: JSON.stringify({

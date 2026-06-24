@@ -1235,14 +1235,31 @@ const main = async (): Promise<void> => {
         void (async () => {
           try {
             const res = await registry.execute("corra_email_ingest", {}, corraCtx);
-            const parsed = JSON.parse(res.content) as { items?: { subject: string; from: string }[] };
+            if (res.isError) {
+              logger.warn({ content: res.content?.slice(0, 200) }, "corra ingest tool error; skipping cycle");
+              return;
+            }
+            let parsed: { items?: { subject: string; from: string }[] };
+            try {
+              parsed = JSON.parse(res.content);
+            } catch {
+              logger.warn({ content: res.content?.slice(0, 200) }, "corra ingest returned non-JSON; skipping cycle");
+              return;
+            }
             for (const it of parsed.items ?? []) {
-              const sc = await registry.execute("corra_interest", { action: "score", text: `${it.subject} ${it.from}` }, corraCtx);
-              const { score } = JSON.parse(sc.content) as { score: number };
+              let score = 0;
+              try {
+                const sc = await registry.execute("corra_interest", { action: "score", text: `${it.subject} ${it.from}` }, corraCtx);
+                if (!sc.isError) score = (JSON.parse(sc.content) as { score?: number }).score ?? 0;
+              } catch {
+                /* scoring is best-effort; default 0 = no ping */
+              }
               if (score >= 0.6) {
                 await sendWithDeliveryQueue("telegram", ownerChat, { text: `📨 High-signal newsletter: "${it.subject}" — ${it.from}` });
               }
-              await registry.execute("corra_interest", { action: "subscribe", text: it.subject }, corraCtx);
+              await registry
+                .execute("corra_interest", { action: "subscribe", text: it.subject }, corraCtx)
+                .catch(() => undefined);
             }
           } catch (err) {
             logger.error({ err }, "corra ingest/ping loop failed");
@@ -1255,6 +1272,10 @@ const main = async (): Promise<void> => {
     const sendDigest = async (mode: "daily" | "weekly") => {
       try {
         const res = await registry.execute("corra_digest", { mode }, corraCtx);
+        if (res.isError) {
+          logger.warn({ mode, content: res.content?.slice(0, 200) }, "corra digest tool error");
+          return;
+        }
         const { text } = JSON.parse(res.content) as { text?: string };
         if (text) await sendWithDeliveryQueue("telegram", ownerChat, { text });
       } catch (err) {
