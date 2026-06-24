@@ -30,3 +30,4 @@ export * from "./mcp/lifecycle.js";
 export * from "./mcp/agent-augmentation.js";
 export * from "./scheduler.js";
 export * from "./corra/email-ingest.js";
+export * from "./corra/email-send.js";

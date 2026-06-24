@@ -61,6 +61,7 @@ import {
   createBrowserTool,
   createEditTool,
   createEmailIngestTool,
+  createEmailSendTool,
   createIdentityEvolveTool,
   createMemoryIngestTool,
   createMemoryRecallTool,
@@ -830,6 +831,17 @@ const main = async (): Promise<void> => {
       password: process.env.CORRA_IMAP_PASSWORD ?? "",
     };
     registry.register(createEmailIngestTool({ imap: corraImap, memory: memoryBackend }));
+    registry.register(
+      createEmailSendTool({
+        smtp: {
+          host: process.env.CORRA_SMTP_HOST ?? "",
+          port: Number(process.env.CORRA_SMTP_PORT ?? "587"),
+          user: process.env.CORRA_SMTP_USER ?? "",
+          password: process.env.CORRA_SMTP_PASSWORD ?? "",
+        },
+        fromAddress: process.env.CORRA_FROM_ADDRESS ?? "corra@localhost",
+      }),
+    );
     if (corraImap.host) {
       const ingestCtx = {
         traceId: "corra-ingest",
