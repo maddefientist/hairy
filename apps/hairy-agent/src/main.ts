@@ -2,6 +2,7 @@ import { execSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 import { basename, join } from "node:path";
+import { Cron } from "croner";
 import {
   type ChannelAdapter,
   DeliveryQueue,
@@ -59,6 +60,7 @@ import {
   checkReminders,
   createBashTool,
   createBrowserTool,
+  createDigestTool,
   createEditTool,
   createEmailIngestTool,
   createEmailSendTool,
@@ -844,22 +846,8 @@ const main = async (): Promise<void> => {
       }),
     );
     registry.register(createInterestModelTool({ memory: memoryBackend }));
-    if (corraImap.host) {
-      const ingestCtx = {
-        traceId: "corra-ingest",
-        cwd: process.cwd(),
-        dataDir: config.dataDir,
-        logger,
-      };
-      setInterval(() => {
-        registry
-          .execute("corra_email_ingest", {}, ingestCtx)
-          .catch((e) => logger.error({ err: e }, "corra ingest interval failed"));
-      }, 120_000);
-      logger.info("corra IMAP poll interval started (120s)");
-    } else {
-      logger.warn("CORRA_IMAP_HOST unset — ingest interval not started");
-    }
+    registry.register(createDigestTool({ memory: memoryBackend }));
+    // Runtime loops (IMAP poll + scoring/ping + digest crons) live in the late Corra runtime block below.
   }
 
   // Tool defs are finalized after providers are set up (orchestrator mode needs buildGatewayForModel).
@@ -1229,6 +1217,46 @@ const main = async (): Promise<void> => {
       await targetChannel.sendMessage(channelId, response);
     });
   }, 10_000);
+
+  // ── Corra runtime (proactive ping + digest schedules) ─────────────────
+  if (process.env.CORRA_ENABLED === "1" && process.env.CORRA_OWNER_CHAT_ID) {
+    const ownerChat = process.env.CORRA_OWNER_CHAT_ID;
+    const corraCtx = { traceId: "corra-runtime", cwd: process.cwd(), dataDir: config.dataDir, logger };
+
+    if (process.env.CORRA_IMAP_HOST) {
+      setInterval(() => {
+        void (async () => {
+          try {
+            const res = await registry.execute("corra_email_ingest", {}, corraCtx);
+            const parsed = JSON.parse(res.content) as { items?: { subject: string; from: string }[] };
+            for (const it of parsed.items ?? []) {
+              const sc = await registry.execute("corra_interest", { action: "score", text: `${it.subject} ${it.from}` }, corraCtx);
+              const { score } = JSON.parse(sc.content) as { score: number };
+              if (score >= 0.6) {
+                await sendWithDeliveryQueue("telegram", ownerChat, { text: `📨 High-signal newsletter: "${it.subject}" — ${it.from}` });
+              }
+            }
+          } catch (err) {
+            logger.error({ err }, "corra ingest/ping loop failed");
+          }
+        })();
+      }, 120_000);
+      logger.info("corra IMAP ingest+ping loop started (120s)");
+    }
+
+    const sendDigest = async (mode: "daily" | "weekly") => {
+      try {
+        const res = await registry.execute("corra_digest", { mode }, corraCtx);
+        const { text } = JSON.parse(res.content) as { text?: string };
+        if (text) await sendWithDeliveryQueue("telegram", ownerChat, { text });
+      } catch (err) {
+        logger.error({ err, mode }, "corra digest send failed");
+      }
+    };
+    new Cron("0 8 * * *", () => void sendDigest("daily"));
+    new Cron("0 9 * * 1", () => void sendDigest("weekly"));
+    logger.info("corra daily/weekly digest schedules registered");
+  }
 
   // ── Plugins + commands ────────────────────────────────────────────────
   const runtimePlugins: HairyClawPlugin[] = [];

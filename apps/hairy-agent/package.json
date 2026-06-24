@@ -20,6 +20,7 @@
     "@hairyclaw/providers": "workspace:*",
     "@hairyclaw/tools": "workspace:*",
     "@hono/node-server": "^1.19.10",
+    "croner": "^8.1.2",
     "hono": "^4.12.5",
     "zod": "^3.24.2"
   }
