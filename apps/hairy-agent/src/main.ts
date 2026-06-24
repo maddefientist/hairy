@@ -63,6 +63,7 @@ import {
   createEmailIngestTool,
   createEmailSendTool,
   createIdentityEvolveTool,
+  createInterestModelTool,
   createMemoryIngestTool,
   createMemoryRecallTool,
   createPdfExtractTool,
@@ -842,6 +843,7 @@ const main = async (): Promise<void> => {
         fromAddress: process.env.CORRA_FROM_ADDRESS ?? "corra@localhost",
       }),
     );
+    registry.register(createInterestModelTool({ memory: memoryBackend }));
     if (corraImap.host) {
       const ingestCtx = {
         traceId: "corra-ingest",
