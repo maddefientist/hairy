@@ -60,6 +60,7 @@ import {
   createBashTool,
   createBrowserTool,
   createEditTool,
+  createEmailIngestTool,
   createIdentityEvolveTool,
   createMemoryIngestTool,
   createMemoryRecallTool,
@@ -822,7 +823,29 @@ const main = async (): Promise<void> => {
 
   if (process.env.CORRA_ENABLED === "1") {
     logger.info("CORRA_ENABLED — registering Corra correspondent tools");
-    // Corra tools + schedules are registered here by later phases (1-5).
+    const corraImap = {
+      host: process.env.CORRA_IMAP_HOST ?? "",
+      port: Number(process.env.CORRA_IMAP_PORT ?? "993"),
+      user: process.env.CORRA_IMAP_USER ?? "",
+      password: process.env.CORRA_IMAP_PASSWORD ?? "",
+    };
+    registry.register(createEmailIngestTool({ imap: corraImap, memory: memoryBackend }));
+    if (corraImap.host) {
+      const ingestCtx = {
+        traceId: "corra-ingest",
+        cwd: process.cwd(),
+        dataDir: config.dataDir,
+        logger,
+      };
+      setInterval(() => {
+        registry
+          .execute("corra_email_ingest", {}, ingestCtx)
+          .catch((e) => logger.error({ err: e }, "corra ingest interval failed"));
+      }, 120_000);
+      logger.info("corra IMAP poll interval started (120s)");
+    } else {
+      logger.warn("CORRA_IMAP_HOST unset — ingest interval not started");
+    }
   }
 
   // Tool defs are finalized after providers are set up (orchestrator mode needs buildGatewayForModel).

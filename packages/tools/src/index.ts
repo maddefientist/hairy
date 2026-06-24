@@ -29,3 +29,4 @@ export * from "./mcp/registry.js";
 export * from "./mcp/lifecycle.js";
 export * from "./mcp/agent-augmentation.js";
 export * from "./scheduler.js";
+export * from "./corra/email-ingest.js";
