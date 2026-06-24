@@ -1,0 +1,17 @@
+{
+  "chain": "gpt-review",
+  "task": "Review the Corra X/Twitter posting path for safety and correctness. This agent posts to Twitter on the user's behalf; nothing may post without explicit owner approval. Read these two files in /home/hari/hairy-corra:\n1. packages/tools/src/corra/x-draft-queue.ts (the corra_x_queue tool: nextQueueState reducer + draft/list/approve/edit/skip, file-backed queue at dataDir/corra/x-queue.json, n8n webhook POST on approve)\n2. apps/hairy-agent/src/main.ts lines 1280-1311 (owner-gated /queue /approve /edit /skip command handlers; owner = CORRA_OWNER_CHAT_ID, gate via ctx.senderId === corraOwnerId)\n\nFocus on: (a) can anything post to the webhook WITHOUT a human /approve? (b) is the owner gate bypassable (empty/unset CORRA_OWNER_CHAT_ID, type coercion, senderId spoofing surface)? (c) concurrent-write/race or queue-corruption risks on the JSON file; (d) double-post / re-approve of an already-approved draft; (e) does a webhook failure leave the queue in a wrong state (marked approved but not posted, or vice versa); (f) injection/escaping in the posted text. Flag issues by severity with file:line. Do NOT rewrite code \u2014 flags only. Be concise.",
+  "run_id": "20260624-004529",
+  "started": 1782261929,
+  "phases": {
+    "review": {
+      "status": "completed",
+      "model": "openai-codex/gpt-5.5",
+      "runtime": "pi",
+      "duration": 124,
+      "output": "review.md",
+      "completed_at": 1782262054
+    }
+  },
+  "last_completed": "review"
+}

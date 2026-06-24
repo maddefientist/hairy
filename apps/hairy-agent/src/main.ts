@@ -80,6 +80,11 @@ import {
   createWebSearchTool,
   createWriteTool,
   createXDraftQueueTool,
+  approveDraft,
+  editDraft,
+  skipDraft,
+  listDrafts,
+  formatPendingList,
   setReminderCallback,
 } from "@hairyclaw/tools";
 import { z } from "zod";
@@ -848,7 +853,7 @@ const main = async (): Promise<void> => {
     );
     registry.register(createInterestModelTool({ memory: memoryBackend }));
     registry.register(createDigestTool({ memory: memoryBackend }));
-    registry.register(createXDraftQueueTool({ n8nWebhookUrl: process.env.CORRA_X_N8N_WEBHOOK ?? "" }));
+    registry.register(createXDraftQueueTool());
     // Runtime loops (IMAP poll + scoring/ping + digest crons) live in the late Corra runtime block below.
   }
 
@@ -1277,29 +1282,37 @@ const main = async (): Promise<void> => {
   const pluginRunner = new PluginRunner(runtimePlugins);
   const commandRouter = new CommandRouter(logger);
 
+
   if (process.env.CORRA_ENABLED === "1") {
     const corraOwnerId = process.env.CORRA_OWNER_CHAT_ID ?? "";
-    const corraCmdCtx = () => ({ traceId: "corra-cmd", cwd: process.cwd(), dataDir: config.dataDir, logger });
-    const corraOwnerOnly = (ctx: { senderId: string }): boolean => corraOwnerId !== "" && ctx.senderId === corraOwnerId;
-    const runQueue = async (action: string, id?: string, text?: string): Promise<string> => {
-      const res = await registry.execute("corra_x_queue", { action, id, text }, corraCmdCtx());
-      const parsed = JSON.parse(res.content) as { text?: string };
-      return parsed.text ?? res.content;
-    };
+    const corraWebhook = process.env.CORRA_X_N8N_WEBHOOK ?? "";
+    const corraDataDir = config.dataDir;
+    const corraOwnerOnly = (ctx: { senderId: string }): boolean =>
+      corraOwnerId !== "" && ctx.senderId === corraOwnerId;
+
     commandRouter.register({
       name: "queue",
       description: "List Corra's pending X drafts (owner only)",
-      handler: async (_args, ctx) => (corraOwnerOnly(ctx) ? runQueue("list") : null),
+      handler: async (_args, ctx) =>
+        corraOwnerOnly(ctx) ? formatPendingList(await listDrafts(corraDataDir)) : null,
     });
     commandRouter.register({
       name: "approve",
       description: "Approve and post an X draft by id (owner only)",
-      handler: async (args, ctx) => (corraOwnerOnly(ctx) ? runQueue("approve", args.trim()) : null),
+      handler: async (args, ctx) => {
+        if (!corraOwnerOnly(ctx)) return null;
+        const res = await approveDraft(corraDataDir, args.trim(), { n8nWebhookUrl: corraWebhook });
+        return res.posted ? `✅ Posted draft ${args.trim()}.` : `⚠️ Not posted: ${res.reason}`;
+      },
     });
     commandRouter.register({
       name: "skip",
       description: "Skip an X draft by id (owner only)",
-      handler: async (args, ctx) => (corraOwnerOnly(ctx) ? runQueue("skip", args.trim()) : null),
+      handler: async (args, ctx) => {
+        if (!corraOwnerOnly(ctx)) return null;
+        await skipDraft(corraDataDir, args.trim());
+        return `🗑️ Skipped draft ${args.trim()}.`;
+      },
     });
     commandRouter.register({
       name: "edit",
@@ -1307,7 +1320,8 @@ const main = async (): Promise<void> => {
       handler: async (args, ctx) => {
         if (!corraOwnerOnly(ctx)) return null;
         const [id, ...rest] = args.trim().split(/\s+/);
-        return runQueue("edit", id, rest.join(" "));
+        await editDraft(corraDataDir, id, rest.join(" "));
+        return `✏️ Edited draft ${id}.`;
       },
     });
   }
