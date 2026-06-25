@@ -92,6 +92,7 @@ import {
   rejectKnowledge,
   listCandidates,
   formatCandidateList,
+  createSupersedeTool,
 } from "@hairyclaw/tools";
 import { z } from "zod";
 import { loadHairyClawConfig } from "./config.js";
@@ -861,6 +862,13 @@ const main = async (): Promise<void> => {
     registry.register(createDigestTool({ memory: memoryBackend }));
     registry.register(createXDraftQueueTool());
     registry.register(createKnowledgeQueueTool());
+    registry.register(
+      createSupersedeTool({
+        backend: memoryBackend,
+        hiveApiUrl: process.env.HARI_HIVE_URL ?? "http://192.168.1.225:8088",
+        hiveApiKey: process.env.HARI_HIVE_API_KEY,
+      }),
+    );
     // Runtime loops (IMAP poll + scoring/ping + digest crons) live in the late Corra runtime block below.
   }
 
