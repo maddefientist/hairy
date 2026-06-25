@@ -1282,9 +1282,12 @@ const main = async (): Promise<void> => {
         logger.error({ err, mode }, "corra digest send failed");
       }
     };
-    new Cron("0 8 * * *", () => void sendDigest("daily"));
-    new Cron("0 9 * * 1", () => void sendDigest("weekly"));
-    logger.info("corra daily/weekly digest schedules registered");
+    const corraTz = process.env.CORRA_TZ || "America/Toronto";
+    const dailyHour = process.env.CORRA_DAILY_HOUR || "8";
+    const weeklyHour = process.env.CORRA_WEEKLY_HOUR || "9";
+    new Cron(`0 ${dailyHour} * * *`, { timezone: corraTz }, () => void sendDigest("daily"));
+    new Cron(`0 ${weeklyHour} * * 1`, { timezone: corraTz }, () => void sendDigest("weekly"));
+    logger.info({ tz: corraTz, dailyHour, weeklyHour }, "corra daily/weekly digest schedules registered");
   }
 
   // ── Plugins + commands ────────────────────────────────────────────────
