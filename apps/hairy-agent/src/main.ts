@@ -86,6 +86,12 @@ import {
   listDrafts,
   formatPendingList,
   setReminderCallback,
+  createKnowledgeQueueTool,
+  promoteKnowledge,
+  editKnowledge,
+  rejectKnowledge,
+  listCandidates,
+  formatCandidateList,
 } from "@hairyclaw/tools";
 import { z } from "zod";
 import { loadHairyClawConfig } from "./config.js";
@@ -854,6 +860,7 @@ const main = async (): Promise<void> => {
     registry.register(createInterestModelTool({ memory: memoryBackend }));
     registry.register(createDigestTool({ memory: memoryBackend }));
     registry.register(createXDraftQueueTool());
+    registry.register(createKnowledgeQueueTool());
     // Runtime loops (IMAP poll + scoring/ping + digest crons) live in the late Corra runtime block below.
   }
 
@@ -1315,6 +1322,17 @@ const main = async (): Promise<void> => {
     const corraOwnerOnly = (ctx: { senderId: string }): boolean =>
       corraOwnerId !== "" && ctx.senderId === corraOwnerId;
 
+    // Knowledge queue with shared brain backend
+    const corraSharedBackend = createMemoryBackend({
+      filePath: join(config.dataDir, "corra", "knowledge-shared.json"),
+      hive: {
+        apiUrl: process.env.HARI_HIVE_URL ?? "http://192.168.1.225:8088",
+        apiKey: process.env.HARI_HIVE_API_KEY,
+        writeNamespace: "claude-shared",
+        readNamespaces: ["claude-shared"],
+      },
+    });
+
     commandRouter.register({
       name: "queue",
       description: "List Corra's pending X drafts (owner only)",
@@ -1347,6 +1365,41 @@ const main = async (): Promise<void> => {
         const [id, ...rest] = args.trim().split(/\s+/);
         await editDraft(corraDataDir, id, rest.join(" "));
         return `✏️ Edited draft ${id}.`;
+      },
+    });
+
+    commandRouter.register({
+      name: "knowledge",
+      description: "List pending knowledge candidates for the shared brain (owner only)",
+      handler: async (_args, ctx) =>
+        corraOwnerOnly(ctx) ? formatCandidateList(await listCandidates(corraDataDir)) : null,
+    });
+    commandRouter.register({
+      name: "promote",
+      description: "Promote a knowledge candidate to the shared brain by id (owner only)",
+      handler: async (args, ctx) => {
+        if (!corraOwnerOnly(ctx)) return null;
+        const res = await promoteKnowledge(corraDataDir, args.trim(), { sharedBackend: corraSharedBackend });
+        return res.promoted ? `✅ Promoted candidate ${args.trim()} to the shared brain.` : `⚠️ Not promoted: ${res.reason}`;
+      },
+    });
+    commandRouter.register({
+      name: "kedit",
+      description: "Edit a knowledge candidate: /kedit N new content (owner only)",
+      handler: async (args, ctx) => {
+        if (!corraOwnerOnly(ctx)) return null;
+        const [id, ...rest] = args.trim().split(/\s+/);
+        await editKnowledge(corraDataDir, id, rest.join(" "));
+        return `✏️ Edited candidate ${id}.`;
+      },
+    });
+    commandRouter.register({
+      name: "kreject",
+      description: "Reject a knowledge candidate by id (owner only)",
+      handler: async (args, ctx) => {
+        if (!corraOwnerOnly(ctx)) return null;
+        await rejectKnowledge(corraDataDir, args.trim());
+        return `🗑️ Rejected candidate ${args.trim()}.`;
       },
     });
   }
