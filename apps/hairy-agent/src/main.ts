@@ -1319,8 +1319,8 @@ const main = async (): Promise<void> => {
     const corraOwnerId = process.env.CORRA_OWNER_CHAT_ID ?? "";
     const corraWebhook = process.env.CORRA_X_N8N_WEBHOOK ?? "";
     const corraDataDir = config.dataDir;
-    const corraOwnerOnly = (ctx: { senderId: string }): boolean =>
-      corraOwnerId !== "" && ctx.senderId === corraOwnerId;
+    const corraOwnerOnly = (ctx: { senderId: string; channelType: string }): boolean =>
+      corraOwnerId !== "" && ctx.senderId === corraOwnerId && ctx.channelType === "telegram";
 
     // Knowledge queue with shared brain backend
     const corraSharedBackend = createMemoryBackend({
@@ -1389,8 +1389,8 @@ const main = async (): Promise<void> => {
       handler: async (args, ctx) => {
         if (!corraOwnerOnly(ctx)) return null;
         const [id, ...rest] = args.trim().split(/\s+/);
-        await editKnowledge(corraDataDir, id, rest.join(" "));
-        return `✏️ Edited candidate ${id}.`;
+        const r = await editKnowledge(corraDataDir, id, rest.join(" "));
+        return r.edited ? `✏️ Edited candidate ${id}.` : `⚠️ ${r.reason}`;
       },
     });
     commandRouter.register({

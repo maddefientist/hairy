@@ -92,7 +92,6 @@ export const addCandidate = async (
     return cand;
   });
 
-// OWNER-ONLY. Writes to the shared brain FIRST, marks promoted only on success. Refuses re-promote. Locked.
 export const promoteKnowledge = async (
   dataDir: string,
   id: string,
@@ -103,17 +102,27 @@ export const promoteKnowledge = async (
     const cand = q.find((c) => c.id === id);
     if (!cand) return { promoted: false, reason: "candidate not found" };
     if (cand.status === "promoted") return { promoted: false, reason: "already promoted" };
-    // Light dedup: skip if the shared brain already has a near-identical title.
+
+    const provenanceTag = `corra:candidate:${cand.id}`;
+
+    // Idempotency + dedup: if the shared brain already has this candidate's provenance
+    // marker (e.g. a prior store succeeded but the local save failed), reconcile the
+    // local status instead of writing a duplicate into the fleet brain.
     try {
-      const existing = await deps.sharedBackend.search(cand.title, 3);
-      if (existing.some((e) => (e.content || "").toLowerCase().includes(cand.title.toLowerCase()))) {
-        // not a hard block — note it, still promote (owner already approved)
+      const existing = await deps.sharedBackend.search(`${cand.title} ${provenanceTag}`, 5);
+      if (existing.some((e) => (e.content || "").includes(provenanceTag))) {
+        await saveQueue(dataDir, nextKnowledgeState(q, "promote", id));
+        return { promoted: true, reason: "already present in shared brain; reconciled" };
       }
     } catch {
-      /* dedup is best-effort */
+      /* dedup is best-effort; proceed to store */
     }
+
+    const promotedAt = new Date().toISOString();
+    const body = `${cand.title}\n\n${cand.content}\n\n— promoted to shared by Corra on owner approval (${provenanceTag}, ${promotedAt})`;
+    // store FIRST (throws -> stays pending), then mark promoted
     try {
-      await deps.sharedBackend.store(`${cand.title}\n\n${cand.content}`, ["corra:promoted", ...cand.tags]); // throws -> stays pending
+      await deps.sharedBackend.store(body, ["corra:promoted", provenanceTag, ...cand.tags]);
     } catch (error: unknown) {
       return { promoted: false, reason: `backend store failed: ${error instanceof Error ? error.message : String(error)}` };
     }
@@ -121,9 +130,14 @@ export const promoteKnowledge = async (
     return { promoted: true };
   });
 
-export const editKnowledge = async (dataDir: string, id: string, content: string): Promise<void> =>
+export const editKnowledge = async (dataDir: string, id: string, content: string): Promise<{ edited: boolean; reason?: string }> =>
   withQueueLock(async () => {
-    await saveQueue(dataDir, nextKnowledgeState(await loadQueue(dataDir), "edit", id, content));
+    const q = await loadQueue(dataDir);
+    const cand = q.find((c) => c.id === id);
+    if (!cand) return { edited: false, reason: "not found" };
+    if (cand.status === "promoted") return { edited: false, reason: "already promoted; cannot edit" };
+    await saveQueue(dataDir, nextKnowledgeState(q, "edit", id, content));
+    return { edited: true };
   });
 
 export const rejectKnowledge = async (dataDir: string, id: string): Promise<void> =>
