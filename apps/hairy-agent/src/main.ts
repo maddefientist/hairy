@@ -1,5 +1,5 @@
 import { execSync } from "node:child_process";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 import { basename, join } from "node:path";
 import { Cron } from "croner";
@@ -1276,25 +1276,8 @@ const main = async (): Promise<void> => {
       logger.info("corra IMAP ingest+ping loop started (120s)");
     }
 
-    const sendDigest = async (mode: "daily" | "weekly") => {
-      try {
-        const res = await registry.execute("corra_digest", { mode }, corraCtx);
-        if (res.isError) {
-          logger.warn({ mode, content: res.content?.slice(0, 200) }, "corra digest tool error");
-          return;
-        }
-        const { text } = JSON.parse(res.content) as { text?: string };
-        if (text) await sendWithDeliveryQueue("telegram", ownerChat, { text });
-      } catch (err) {
-        logger.error({ err, mode }, "corra digest send failed");
-      }
-    };
-    const corraTz = process.env.CORRA_TZ || "America/Toronto";
-    const dailyHour = process.env.CORRA_DAILY_HOUR || "8";
-    const weeklyHour = process.env.CORRA_WEEKLY_HOUR || "9";
-    new Cron(`0 ${dailyHour} * * *`, { timezone: corraTz }, () => void sendDigest("daily"));
-    new Cron(`0 ${weeklyHour} * * 1`, { timezone: corraTz }, () => void sendDigest("weekly"));
-    logger.info({ tz: corraTz, dailyHour, weeklyHour }, "corra daily/weekly digest schedules registered");
+    // Digest schedules are agent-routed (LLM synthesis) and live in a later block,
+    // after the orchestrator + channels are wired (see "Corra digest schedules").
   }
 
   // ── Plugins + commands ────────────────────────────────────────────────
@@ -1877,6 +1860,32 @@ const main = async (): Promise<void> => {
       void orchestrator.handleMessage(msg);
     });
     await channel.connect();
+  }
+
+  // ── Corra digest schedules (agent-routed: LLM synthesizes, delivers to owner) ──
+  if (process.env.CORRA_ENABLED === "1" && process.env.CORRA_OWNER_CHAT_ID) {
+    const digestOwner = process.env.CORRA_OWNER_CHAT_ID;
+    const digestTz = process.env.CORRA_TZ || "America/Toronto";
+    const dHour = process.env.CORRA_DAILY_HOUR || "8";
+    const wHour = process.env.CORRA_WEEKLY_HOUR || "9";
+    const runDigest = (mode: "daily" | "weekly"): void => {
+      const prompt =
+        mode === "daily"
+          ? 'Daily digest time. Call corra_digest with mode "daily" to get today\'s newsletters, then write me a concise, sourced synthesis: the key themes, what\'s genuinely new, and anything that confirms or contradicts our existing knowledge (use memory_recall against claude-shared if useful). If nothing arrived today, just say so in one line.'
+          : 'Weekly digest time. Call corra_digest with mode "weekly", then give me the week\'s through-line: the 3-5 themes that mattered, what changed, and what\'s worth acting on. Cite sources. If the week was quiet, say so briefly.';
+      void orchestrator.handleMessage({
+        id: randomUUID(),
+        channelId: digestOwner,
+        channelType: "telegram",
+        senderId: digestOwner,
+        senderName: "Mohsen",
+        content: { text: prompt },
+        timestamp: new Date().toISOString(),
+      });
+    };
+    new Cron(`0 ${dHour} * * *`, { timezone: digestTz }, () => runDigest("daily"));
+    new Cron(`0 ${wHour} * * 1`, { timezone: digestTz }, () => runDigest("weekly"));
+    logger.info({ tz: digestTz, dHour, wHour }, "corra agent-routed digest schedules registered");
   }
 
   // ── Sidecars ─────────────────────────────────────────────────────────────
