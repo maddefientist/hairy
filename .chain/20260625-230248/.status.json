@@ -1,0 +1,17 @@
+{
+  "chain": "gpt-review",
+  "task": "Review the Corra knowledge-promotion path for safety. This promotes knowledge from a private namespace to the SHARED fleet-wide brain (claude-shared) that powers architectural decisions for all agents \u2014 so bad/unvetted writes are high-impact, and only the human owner may promote. Read in /home/hari/hairy-corra:\n1. packages/tools/src/corra/knowledge-queue.ts (full: nextKnowledgeState reducer, file-backed queue, addCandidate/listCandidates, promoteKnowledge/editKnowledge/rejectKnowledge owner-only fns, createKnowledgeQueueTool model-facing tool, promoteKnowledge writes to deps.sharedBackend then marks promoted)\n2. apps/hairy-agent/src/main.ts lines 1320-1410 (owner-gated /knowledge /promote /kedit /kreject commands; corraSharedBackend = createMemoryBackend writeNamespace=claude-shared; gate corraOwnerOnly via ctx.senderId === CORRA_OWNER_CHAT_ID) and line ~1326 backend construction.\n\nFocus: (a) can the MODEL (LLM) cause a write to claude-shared without a human /promote? (the tool schema should be draft/list only) (b) owner-gate bypass (empty/unset owner id, senderId spoof surface) (c) double-promote / re-promote of an already-promoted item (d) does a sharedBackend.store failure leave state inconsistent (marked promoted but not written, or vice versa) (e) concurrency/race or queue-file corruption (f) does promoted content carry provenance, and is there any dedup against existing shared knowledge to avoid polluting the brain. Flag by severity with file:line. Do NOT rewrite \u2014 flags only. Concise.",
+  "run_id": "20260625-230248",
+  "started": 1782428568,
+  "phases": {
+    "review": {
+      "status": "completed",
+      "model": "openai-codex/gpt-5.5",
+      "runtime": "pi",
+      "duration": 133,
+      "output": "review.md",
+      "completed_at": 1782428701
+    }
+  },
+  "last_completed": "review"
+}

@@ -1402,6 +1402,28 @@ const main = async (): Promise<void> => {
         return `🗑️ Rejected candidate ${args.trim()}.`;
       },
     });
+    const reactTopic = async (topic: string, signal: "useful" | "wrong"): Promise<string> => {
+      const t = topic.trim().toLowerCase();
+      if (!t) return `Usage: /${signal === "useful" ? "more" : "less"} <topic>`;
+      await registry.execute(
+        "corra_interest",
+        { action: "react", topics: [t], signal },
+        { traceId: "corra-cmd", cwd: process.cwd(), dataDir: corraDataDir, logger },
+      );
+      return signal === "useful"
+        ? `👍 More "${t}" — noted, I'll surface more of it.`
+        : `👎 Less "${t}" — noted, I'll ease off.`;
+    };
+    commandRouter.register({
+      name: "more",
+      description: "Boost interest in a topic: /more <topic> (owner only)",
+      handler: async (args, ctx) => (corraOwnerOnly(ctx) ? reactTopic(args, "useful") : null),
+    });
+    commandRouter.register({
+      name: "less",
+      description: "Reduce interest in a topic: /less <topic> (owner only)",
+      handler: async (args, ctx) => (corraOwnerOnly(ctx) ? reactTopic(args, "wrong") : null),
+    });
   }
 
   const clearAllCooldowns = (): void => {
