@@ -66,7 +66,12 @@ const loadWeights = async (memory: MemoryBackend): Promise<Weights> => {
 const interestSchema = z.object({
   action: z.enum(["score", "react", "subscribe"]),
   text: z.string().optional(),
-  topics: z.array(z.string()).optional(),
+  topics: z
+    .preprocess(
+      (v) => (typeof v === "string" ? v.split(",").map((s) => s.trim()).filter(Boolean) : v),
+      z.array(z.string()),
+    )
+    .optional(),
   signal: z.enum(["useful", "noted", "wrong"]).optional(),
   itemId: z.string().optional(),
 });

@@ -150,7 +150,12 @@ const toolSchema = z.object({
   action: z.enum(["draft", "list"]),
   title: z.string().optional(),
   content: z.string().optional(),
-  tags: z.array(z.string()).optional(),
+  tags: z
+    .preprocess(
+      (v) => (typeof v === "string" ? v.split(",").map((s) => s.trim()).filter(Boolean) : v),
+      z.array(z.string()),
+    )
+    .optional(),
 });
 
 export const createKnowledgeQueueTool = (): Tool => ({

@@ -11,7 +11,12 @@ export interface SupersedeDeps {
 const supersedeSchema = z.object({
   query: z.string().describe("text that locates the outdated knowledge item to correct"),
   newContent: z.string().describe("the corrected/updated content that replaces it"),
-  tags: z.array(z.string()).optional(),
+  tags: z
+    .preprocess(
+      (v) => (typeof v === "string" ? v.split(",").map((s) => s.trim()).filter(Boolean) : v),
+      z.array(z.string()),
+    )
+    .optional(),
 });
 
 export const createSupersedeTool = (deps: SupersedeDeps): Tool => ({

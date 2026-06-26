@@ -1,5 +1,17 @@
-import { describe, it, expect } from "vitest";
-import { scoreItem, applyReaction, extractTopics, applySubscription } from "../../src/corra/interest-model.js";
+import { describe, it, expect, vi } from "vitest";
+import { scoreItem, applyReaction, extractTopics, applySubscription, createInterestModelTool } from "../../src/corra/interest-model.js";
+
+describe("topics coercion", () => {
+  it("accepts a bare string for topics (model passes 'ai' not ['ai'])", async () => {
+    const store = vi.fn().mockResolvedValue("id");
+    const backend = { name: "x", search: vi.fn().mockResolvedValue([]), store, feedback: vi.fn() };
+    const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn(), child() { return logger; } };
+    const tool = createInterestModelTool({ memory: backend as never });
+    const res = await tool.execute({ action: "react", topics: "ai agents", signal: "useful" }, { traceId: "t", cwd: "/", dataDir: "/tmp", logger } as never);
+    expect(res.isError).toBeFalsy();
+    expect(store).toHaveBeenCalled();
+  });
+});
 
 describe("interest model", () => {
   it("scores higher when topic weights match item text", () => {
