@@ -31,6 +31,7 @@ export * from "./mcp/agent-augmentation.js";
 export * from "./scheduler.js";
 export * from "./corra/email-ingest.js";
 export * from "./corra/email-send.js";
+export * from "./corra/inbox.js";
 export * from "./corra/interest-model.js";
 export * from "./corra/digest.js";
 export * from "./corra/x-draft-queue.js";

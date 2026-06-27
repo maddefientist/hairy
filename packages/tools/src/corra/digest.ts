@@ -2,6 +2,7 @@ import { z } from "zod";
 import type { MemoryBackend } from "@hairyclaw/memory";
 import type { Tool, ToolContext } from "../types.js";
 import type { NewsletterDigest } from "./email-ingest.js";
+import { listInbox, type InboxEntry } from "./inbox.js";
 
 export interface ScoredItem { id: string; score: number; }
 
@@ -58,16 +59,10 @@ export const createDigestTool = (deps: DigestDeps): Tool => ({
   timeout_ms: 30_000,
   async execute(args, ctx: ToolContext) {
     const input = digestSchema.parse(args);
-    const now = Date.now();
-    if (input.mode === "item") {
-      const results = await deps.memory.search(input.messageId ?? "corra:newsletter", 5);
-      const items = parseDigests(results);
-      return { content: JSON.stringify({ text: assemble(items.slice(0, 1), "item"), count: items.length ? 1 : 0 }) };
-    }
     const days = input.windowDays ?? (input.mode === "weekly" ? 7 : 1);
-    const results = await deps.memory.search("corra:newsletter", 50);
-    const items = parseDigests(results).filter((d) => withinDays(d.receivedAt, days, now));
-    ctx.logger.info({ mode: input.mode, count: items.length }, "corra digest");
-    return { content: JSON.stringify({ text: assemble(items, input.mode), count: items.length }), metadata: { count: items.length } };
+    const boxItems = await listInbox(ctx.dataDir, 200, input.mode === "item" ? 1000000 : days);
+    const digests: NewsletterDigest[] = boxItems.map((e: InboxEntry) => ({ ...e, cleanText: e.snippet }));
+    ctx.logger.info({ mode: input.mode, count: digests.length }, "corra digest");
+    return { content: JSON.stringify({ text: assemble(digests, input.mode), count: digests.length }), metadata: { count: digests.length } };
   },
 });

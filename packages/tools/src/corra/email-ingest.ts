@@ -3,6 +3,7 @@ import { simpleParser, type ParsedMail } from "mailparser";
 import { z } from "zod";
 import type { MemoryBackend } from "@hairyclaw/memory";
 import type { Tool, ToolContext } from "../types.js";
+import { appendToInbox } from "./inbox.js";
 
 export interface NewsletterDigest {
   messageId: string;
@@ -88,6 +89,7 @@ export const createEmailIngestTool = (deps: EmailIngestDeps): Tool => ({
     const ingested: NewsletterDigest[] = [];
     for (const m of raw) {
       const digest = parseNewsletter(await simpleParser(m.source));
+      await appendToInbox(ctx.dataDir, digest);
       let isDuplicate = false;
       try {
         const dupes = await deps.memory.search(digest.messageId, 1);

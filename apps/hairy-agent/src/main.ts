@@ -65,6 +65,7 @@ import {
   createEmailIngestTool,
   createEmailSendTool,
   createIdentityEvolveTool,
+  createInboxTool,
   createInterestModelTool,
   createMemoryIngestTool,
   createMemoryRecallTool,
@@ -859,6 +860,7 @@ const main = async (): Promise<void> => {
       }),
     );
     registry.register(createInterestModelTool({ memory: memoryBackend }));
+    registry.register(createInboxTool());
     registry.register(createDigestTool({ memory: memoryBackend }));
     registry.register(createXDraftQueueTool());
     registry.register(createKnowledgeQueueTool());
