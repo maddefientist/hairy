@@ -1311,6 +1311,7 @@ const main = async (): Promise<void> => {
   if (process.env.CORRA_ENABLED === "1") {
     const corraOwnerId = process.env.CORRA_OWNER_CHAT_ID ?? "";
     const corraWebhook = process.env.CORRA_X_N8N_WEBHOOK ?? "";
+    const corraWebhookSecret = process.env.CORRA_X_WEBHOOK_SECRET ?? "";
     const corraDataDir = config.dataDir;
     const corraOwnerOnly = (ctx: { senderId: string; channelType: string }): boolean =>
       corraOwnerId !== "" && ctx.senderId === corraOwnerId && ctx.channelType === "telegram";
@@ -1337,7 +1338,10 @@ const main = async (): Promise<void> => {
       description: "Approve and post an X draft by id (owner only)",
       handler: async (args, ctx) => {
         if (!corraOwnerOnly(ctx)) return null;
-        const res = await approveDraft(corraDataDir, args.trim(), { n8nWebhookUrl: corraWebhook });
+        const res = await approveDraft(corraDataDir, args.trim(), {
+          n8nWebhookUrl: corraWebhook,
+          n8nSharedSecret: corraWebhookSecret,
+        });
         return res.posted ? `✅ Posted draft ${args.trim()}.` : `⚠️ Not posted: ${res.reason}`;
       },
     });
