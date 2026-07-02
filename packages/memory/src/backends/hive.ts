@@ -198,7 +198,9 @@ export class HiveMemoryBackend implements MemoryBackend {
       if (res.ok) {
         const p = (await res.json()) as Record<string, unknown>;
         if (typeof p.id === "string") return p.id;
-      } else {
+      } else if (lastStatus === 0) {
+        // Don't let a compat-endpoint 404 (these routes are absent on modern hive) clobber the
+        // meaningful status from the primary /ingest endpoint (e.g. 422 secret-scanner reject).
         lastStatus = res.status;
       }
     } catch {
@@ -215,7 +217,7 @@ export class HiveMemoryBackend implements MemoryBackend {
       if (res.ok) {
         const p = (await res.json()) as Record<string, unknown>;
         if (typeof p.id === "string") return p.id;
-      } else {
+      } else if (lastStatus === 0) {
         lastStatus = res.status;
       }
     } catch {
