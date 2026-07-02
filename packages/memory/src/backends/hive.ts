@@ -33,6 +33,23 @@ export interface HiveBackendOptions {
   device?: string;
 }
 
+/**
+ * Thrown by HiveMemoryBackend.store() when no endpoint accepted the write.
+ * `status` is the last HTTP status the server returned (0 = no response / network error).
+ * `permanent` marks non-retryable rejections — 4xx other than 429 (e.g. 422 secret-scanner reject) —
+ * so callers can stop retrying the same content forever instead of poison-looping.
+ */
+export class HiveStoreError extends Error {
+  readonly status: number;
+  readonly permanent: boolean;
+  constructor(status: number) {
+    super(status > 0 ? `hive store failed: HTTP ${status}` : "hive store: all endpoints unreachable");
+    this.name = "HiveStoreError";
+    this.status = status;
+    this.permanent = status >= 400 && status < 500 && status !== 429;
+  }
+}
+
 const buildHeaders = (apiKey?: string): Record<string, string> => {
   const headers: Record<string, string> = { "content-type": "application/json" };
   if (apiKey) {
@@ -143,6 +160,11 @@ export class HiveMemoryBackend implements MemoryBackend {
       knowledgeItem.extraction_source = options.extractionSource;
     }
 
+    // Track the last HTTP status the server actually returned so the thrown error is diagnosable
+    // (e.g. 422 = secret-scanner reject) instead of the misleading "all endpoints unreachable",
+    // which hides permanent rejections and makes callers retry them forever.
+    let lastStatus = 0;
+
     // Try modern /ingest endpoint first
     try {
       const res = await fetch(`${this.root}/ingest`, {
@@ -159,9 +181,11 @@ export class HiveMemoryBackend implements MemoryBackend {
         if (typeof counts?.knowledge_items === "number" && counts.knowledge_items > 0) {
           return randomUUID();
         }
+      } else {
+        lastStatus = res.status;
       }
     } catch {
-      /* fall through */
+      /* network error — fall through */
     }
 
     // Compatibility: /api/v1/knowledge
@@ -174,9 +198,11 @@ export class HiveMemoryBackend implements MemoryBackend {
       if (res.ok) {
         const p = (await res.json()) as Record<string, unknown>;
         if (typeof p.id === "string") return p.id;
+      } else {
+        lastStatus = res.status;
       }
     } catch {
-      /* fall through */
+      /* network error — fall through */
     }
 
     // Legacy: /knowledge
@@ -189,13 +215,17 @@ export class HiveMemoryBackend implements MemoryBackend {
       if (res.ok) {
         const p = (await res.json()) as Record<string, unknown>;
         if (typeof p.id === "string") return p.id;
+      } else {
+        lastStatus = res.status;
       }
     } catch {
-      /* fall through */
+      /* network error — fall through */
     }
 
-    // All endpoints failed — let SemanticMemory fall back to local
-    throw new Error("hive store: all endpoints unreachable");
+    // Surface the real HTTP status when the server responded (e.g. 422 secret-scanner reject) so
+    // callers can distinguish permanent rejections from transient/network failures. Only when NO
+    // endpoint responded at all do we report unreachable.
+    throw new HiveStoreError(lastStatus);
   }
 
   async search(query: string, topK = 5, options?: SearchOptions): Promise<SearchResult[]> {

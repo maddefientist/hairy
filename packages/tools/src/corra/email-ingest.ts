@@ -1,9 +1,44 @@
+import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { join } from "node:path";
 import { ImapFlow } from "imapflow";
 import { simpleParser, type ParsedMail } from "mailparser";
 import { z } from "zod";
-import type { MemoryBackend } from "@hairyclaw/memory";
+import { HiveStoreError, type MemoryBackend } from "@hairyclaw/memory";
 import type { Tool, ToolContext } from "../types.js";
 import { appendToInbox } from "./inbox.js";
+
+// Dead-letter for newsletters the hive refused (e.g. 422 secret-scanner reject). The email itself
+// is always safe in the local inbox; this records what still needs a (sanitized) push to hive so a
+// later re-sync can find it, and stops the message from being refetched forever.
+interface HiveDeferredEntry {
+  messageId: string;
+  subject: string;
+  status: number;
+  permanent: boolean;
+  at: string;
+}
+
+const DEFERRED_CAP = 500;
+const deferredPath = (dataDir: string): string => join(dataDir, "corra", "hive-deferred.json");
+
+const recordHiveDeferred = async (dataDir: string, entry: HiveDeferredEntry): Promise<void> => {
+  const path = deferredPath(dataDir);
+  let existing: HiveDeferredEntry[] = [];
+  try {
+    const raw = await readFile(path, "utf8");
+    if (raw.trim() !== "") {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) existing = parsed as HiveDeferredEntry[];
+    }
+  } catch {
+    /* missing/corrupt -> start fresh */
+  }
+  const next = [...existing, entry].slice(-DEFERRED_CAP);
+  await mkdir(join(dataDir, "corra"), { recursive: true });
+  const tmp = `${path}.tmp`;
+  await writeFile(tmp, JSON.stringify(next, null, 2));
+  await rename(tmp, path);
+};
 
 export interface NewsletterDigest {
   messageId: string;
@@ -87,8 +122,11 @@ export const createEmailIngestTool = (deps: EmailIngestDeps): Tool => ({
     //    Hive failures degrade gracefully — a failed dedup is treated as "new",
     //    a failed store leaves the message unseen so the next poll retries it.
     const ingested: NewsletterDigest[] = [];
+    let hiveDeferred = 0;
     for (const m of raw) {
       const digest = parseNewsletter(await simpleParser(m.source));
+      // The local inbox is the reliable backbone — persist FIRST so the email is never lost,
+      // whatever the hive does next.
       await appendToInbox(ctx.dataDir, digest);
       let isDuplicate = false;
       try {
@@ -106,20 +144,37 @@ export const createEmailIngestTool = (deps: EmailIngestDeps): Tool => ({
           ]);
           ingested.push(digest);
         } catch (err) {
-          ctx.logger.error({ err }, "corra store failed; leaving message unseen for retry");
-          continue;
+          // The email is already in the local inbox. Do NOT leave the message unseen — that caused
+          // an infinite 120s refetch/poison loop (e.g. 422 secret-scanner rejects of newsletters
+          // retried forever, plus 60s tool timeouts). Mark it Seen and dead-letter the hive-deferred
+          // item for a later sanitized re-sync. HiveStoreError surfaces permanent (4xx) vs transient.
+          const status = err instanceof HiveStoreError ? err.status : 0;
+          const permanent = err instanceof HiveStoreError ? err.permanent : false;
+          ctx.logger.warn(
+            { messageId: digest.messageId, subject: digest.subject, status, permanent },
+            "corra hive store failed; email kept in local inbox, marking seen (no retry loop)",
+          );
+          await recordHiveDeferred(ctx.dataDir, {
+            messageId: digest.messageId,
+            subject: digest.subject,
+            status,
+            permanent,
+            at: new Date().toISOString(),
+          });
+          hiveDeferred += 1;
         }
       }
       await client.messageFlagsAdd(String(m.uid), ["\\Seen"], { uid: true });
     }
     await client.logout();
-    ctx.logger.info({ count: ingested.length }, "corra ingest run");
+    ctx.logger.info({ count: ingested.length, hiveDeferred }, "corra ingest run");
     return {
       content: JSON.stringify({
         ingested: ingested.length,
+        hiveDeferred,
         items: ingested.map((i) => ({ subject: i.subject, from: i.from })),
       }),
-      metadata: { count: ingested.length },
+      metadata: { count: ingested.length, hiveDeferred },
     };
   },
 });
