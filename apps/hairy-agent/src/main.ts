@@ -869,6 +869,7 @@ const main = async (): Promise<void> => {
         backend: memoryBackend,
         hiveApiUrl: process.env.HARI_HIVE_URL ?? "http://192.168.1.225:8088",
         hiveApiKey: process.env.HARI_HIVE_API_KEY,
+        namespace: process.env.HARI_HIVE_WRITE_NAMESPACE ?? process.env.HARI_HIVE_NAMESPACE ?? "corra",
       }),
     );
     // Runtime loops (IMAP poll + scoring/ping + digest crons) live in the late Corra runtime block below.
