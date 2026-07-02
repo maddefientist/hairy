@@ -94,6 +94,7 @@ import {
   listCandidates,
   formatCandidateList,
   createSupersedeTool,
+  ensureCorraIdentity,
 } from "@hairyclaw/tools";
 import { z } from "zod";
 import { loadHairyClawConfig } from "./config.js";
@@ -841,6 +842,12 @@ const main = async (): Promise<void> => {
 
   if (process.env.CORRA_ENABLED === "1") {
     logger.info("CORRA_ENABLED — registering Corra correspondent tools");
+    // C1: the prompt builder reads the persona from {dataDir}/memory/identity.md. Seed it if missing
+    // so Corra loads as herself (not generic HairyClaw), and assert the marker is present.
+    const identityLoaded = await ensureCorraIdentity(config.dataDir, logger);
+    if (!identityLoaded) {
+      logger.error("CORRA persona identity NOT loaded — the agent will not behave as Corra");
+    }
     const corraImap = {
       host: process.env.CORRA_IMAP_HOST ?? "",
       port: Number(process.env.CORRA_IMAP_PORT ?? "993"),
