@@ -1,26 +1,56 @@
+import { mkdtemp, readFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, it, expect, vi } from "vitest";
-import { scoreItem, applyReaction, extractTopics, applySubscription, createInterestModelTool } from "../../src/corra/interest-model.js";
+import {
+  scoreItem,
+  applyReaction,
+  extractTopics,
+  applySubscription,
+  loadWeights,
+  saveWeights,
+  createInterestModelTool,
+} from "../../src/corra/interest-model.js";
 
-describe("topics coercion", () => {
-  it("accepts a bare string for topics (model passes 'ai' not ['ai'])", async () => {
-    const store = vi.fn().mockResolvedValue("id");
-    const backend = { name: "x", search: vi.fn().mockResolvedValue([]), store, feedback: vi.fn() };
-    const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn(), child() { return logger; } };
+const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn(), child() { return logger; } };
+
+describe("topics coercion + file persistence", () => {
+  it("accepts a bare string for topics and persists weights to the local file (not hive)", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "corra-int-"));
+    const store = vi.fn();
+    const backend = { name: "x", search: vi.fn(), store, feedback: vi.fn() };
     const tool = createInterestModelTool({ memory: backend as never });
-    const res = await tool.execute({ action: "react", topics: "ai agents", signal: "useful" }, { traceId: "t", cwd: "/", dataDir: "/tmp", logger } as never);
+    const res = await tool.execute(
+      { action: "react", topics: "ai agents", signal: "useful" },
+      { traceId: "t", cwd: "/", dataDir: dir, logger } as never,
+    );
     expect(res.isError).toBeFalsy();
-    expect(store).toHaveBeenCalled();
+    // weights go to the local file, NOT hive semantic-append
+    expect(store).not.toHaveBeenCalled();
+    const saved = JSON.parse(await readFile(join(dir, "corra", "interest-model.json"), "utf8"));
+    expect(saved["ai agents"]).toBeGreaterThan(0.5);
   });
 });
 
-describe("interest model", () => {
-  it("scores higher when topic weights match item text", () => {
+describe("interest model scoring (max matched weight, no divide-by-total decay)", () => {
+  it("scores higher when a topic weight matches the item text", () => {
     const w = { "ai agents": 0.9, crypto: 0.1 };
     expect(scoreItem("new AI agents framework", w)).toBeGreaterThan(scoreItem("crypto price moves", w));
   });
   it("returns 0 when no weights", () => {
     expect(scoreItem("anything", {})).toBe(0);
   });
+  it("does NOT decay as unrelated topics accumulate (the H1 bug)", () => {
+    const sparse = { agents: 0.7 };
+    const crowded: Record<string, number> = { agents: 0.7 };
+    for (let i = 0; i < 50; i++) crowded[`topic${i}`] = 0.5;
+    // matching 'agents' scores 0.7 in both — vocabulary size must not dilute it
+    expect(scoreItem("about agents", crowded)).toBe(scoreItem("about agents", sparse));
+    expect(scoreItem("about agents", crowded)).toBe(0.7);
+  });
+});
+
+describe("reactions", () => {
   it("reinforces topics on a useful reaction", () => {
     expect(applyReaction({ "ai agents": 0.5 }, ["ai agents"], "useful")["ai agents"]).toBeGreaterThan(0.5);
   });
@@ -41,10 +71,22 @@ describe("subscription learning", () => {
     expect(t).not.toContain("new");
     expect(t).not.toContain("ai"); // too short (<4 chars)
   });
-  it("applySubscription builds weight up to the cap, never above", () => {
+  it("applySubscription builds weight up to a cap ABOVE the ping threshold (can cross 0.6)", () => {
     let w: Record<string, number> = {};
     for (let i = 0; i < 20; i++) w = applySubscription(w, ["agents"]);
-    expect(w.agents).toBeGreaterThan(0);
-    expect(w.agents).toBeLessThanOrEqual(0.55);
+    expect(w.agents).toBeGreaterThan(0.6); // reachable now (old 0.55 cap could not)
+    expect(w.agents).toBeLessThanOrEqual(0.9);
+  });
+});
+
+describe("weights file round-trip", () => {
+  it("saveWeights then loadWeights returns the same numeric map", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "corra-int-"));
+    await saveWeights(dir, { agents: 0.7, crypto: 0.2 });
+    expect(await loadWeights(dir)).toEqual({ agents: 0.7, crypto: 0.2 });
+  });
+  it("loadWeights returns {} when the file is missing", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "corra-int-"));
+    expect(await loadWeights(dir)).toEqual({});
   });
 });

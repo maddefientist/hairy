@@ -1282,9 +1282,10 @@ const main = async (): Promise<void> => {
               if (score >= 0.6) {
                 await sendWithDeliveryQueue("telegram", ownerChat, { text: `📨 High-signal newsletter: "${it.subject}" — ${it.from}` });
               }
-              await registry
-                .execute("corra_interest", { action: "subscribe", text: it.subject }, corraCtx)
-                .catch(() => undefined);
+              // NOTE: no blanket auto-subscribe here. Weights move only on real engagement
+              // (owner /more, /less, reactions, or opening an item) — auto-subscribing every
+              // arrival inflated every topic and, capped below the ping threshold, guaranteed
+              // zero pings (H1).
             }
           } catch (err) {
             logger.error({ err }, "corra ingest/ping loop failed");
