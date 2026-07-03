@@ -95,6 +95,8 @@ import {
   formatCandidateList,
   createSupersedeTool,
   ensureCorraIdentity,
+  collectHealth,
+  formatHealth,
 } from "@hairyclaw/tools";
 import { z } from "zod";
 import { loadHairyClawConfig } from "./config.js";
@@ -1911,7 +1913,21 @@ const main = async (): Promise<void> => {
     };
     new Cron(`0 ${dHour} * * *`, { timezone: digestTz }, () => runDigest("daily"));
     new Cron(`0 ${wHour} * * 1`, { timezone: digestTz }, () => runDigest("weekly"));
-    logger.info({ tz: digestTz, dHour, wHour }, "corra agent-routed digest schedules registered");
+
+    // H4: daily health footer to the owner (observability). Surfaces inbox/interest state and the
+    // hive-deferred count — the key signal that ingest-to-hive is failing — 5 min after the digest.
+    const hHour = process.env.CORRA_HEALTH_HOUR || dHour;
+    new Cron(`5 ${hHour} * * *`, { timezone: digestTz }, () => {
+      void (async () => {
+        try {
+          const snapshot = await collectHealth(config.dataDir);
+          await sendWithDeliveryQueue("telegram", digestOwner, { text: formatHealth(snapshot) });
+        } catch (err) {
+          logger.warn({ err }, "corra health footer failed");
+        }
+      })();
+    });
+    logger.info({ tz: digestTz, dHour, wHour, hHour }, "corra agent-routed digest + health schedules registered");
   }
 
   // ── Sidecars ─────────────────────────────────────────────────────────────
