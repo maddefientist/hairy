@@ -84,6 +84,38 @@ export const parseNewsletter = (mail: ParsedMail): NewsletterDigest => {
   };
 };
 
+/**
+ * Strip the things that (a) make newsletters landfill in the semantic index and (b) trip the hive
+ * secret-scanner (which was 422-rejecting every newsletter): tracking URLs, long base64/hex blobs,
+ * and access-key-shaped tokens. The full raw body always stays in the local inbox; hive only needs
+ * a clean, recall-friendly gist.
+ */
+export const stripTracking = (text: string): string =>
+  text
+    .replace(/https?:\/\/\S+/g, " ")
+    .replace(/\bAKIA[0-9A-Z]{16}\b/g, " ")
+    .replace(/\b[A-Za-z0-9+/]{40,}={0,2}\b/g, " ")
+    .replace(/\b[0-9a-fA-F]{32,}\b/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+/**
+ * Distilled, scanner-safe summary of a newsletter for the hive semantic index. Compact (a short
+ * cleaned excerpt, not the full body) so the `corra` namespace stops being a landfill of raw blobs.
+ * Includes `Ref: <messageId>` so hive dedup by message-id keeps working.
+ */
+export const distillNewsletter = (d: NewsletterDigest): string =>
+  [
+    `Newsletter: ${d.subject}`,
+    `From: ${d.from}`,
+    d.listId ? `List: ${d.listId}` : "",
+    `Received: ${d.receivedAt}`,
+    `Ref: ${d.messageId}`,
+    `Summary: ${stripTracking(d.cleanText).slice(0, 600)}`,
+  ]
+    .filter(Boolean)
+    .join("\n");
+
 const ingestSchema = z.object({ limit: z.number().optional() });
 
 export const createEmailIngestTool = (deps: EmailIngestDeps): Tool => ({
@@ -137,7 +169,9 @@ export const createEmailIngestTool = (deps: EmailIngestDeps): Tool => ({
       }
       if (!isDuplicate) {
         try {
-          await deps.memory.store(JSON.stringify(digest), [
+          // Store only a distilled, sanitized summary — the full body lives in the local inbox.
+          // This stops the corra namespace landfilling and stops tripping the secret scanner.
+          await deps.memory.store(distillNewsletter(digest), [
             "corra:newsletter",
             `from:${digest.from}`,
             digest.listId ? `list:${digest.listId}` : "list:none",
