@@ -7,11 +7,13 @@
  */
 import { MEMORY_TYPES, type MemoryBackend } from "@hairyclaw/memory";
 import { z } from "zod";
+import { splitCsv } from "../coerce.js";
 import type { Tool } from "../types.js";
 
 const memoryIngestSchema = z.object({
   content: z.string().min(1).max(20000),
-  tags: z.array(z.string().min(1).max(64)).max(20).optional(),
+  // Coerce a comma-separated string into an array — models frequently pass `tags: "a, b"`.
+  tags: z.preprocess(splitCsv, z.array(z.string().min(1).max(64)).max(20)).optional(),
   memory_type: z.enum(MEMORY_TYPES).optional(),
   extraction_source: z.string().max(256).optional(),
 });

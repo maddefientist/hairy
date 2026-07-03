@@ -1,5 +1,6 @@
 import { z } from "zod";
 import type { MemoryBackend } from "@hairyclaw/memory";
+import { splitCsv } from "../coerce.js";
 import type { Tool, ToolContext } from "../types.js";
 
 export type Weights = Record<string, number>;
@@ -66,12 +67,7 @@ const loadWeights = async (memory: MemoryBackend): Promise<Weights> => {
 const interestSchema = z.object({
   action: z.enum(["score", "react", "subscribe"]),
   text: z.string().optional(),
-  topics: z
-    .preprocess(
-      (v) => (typeof v === "string" ? v.split(",").map((s) => s.trim()).filter(Boolean) : v),
-      z.array(z.string()),
-    )
-    .optional(),
+  topics: z.preprocess(splitCsv, z.array(z.string())).optional(),
   signal: z.enum(["useful", "noted", "wrong"]).optional(),
   itemId: z.string().optional(),
 });

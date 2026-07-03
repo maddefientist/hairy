@@ -1897,10 +1897,13 @@ const main = async (): Promise<void> => {
           : 'Weekly digest time. Call corra_digest with mode "weekly", then give me the week\'s through-line: the 3-5 themes that mattered, what changed, and what\'s worth acting on. Cite sources. If the week was quiet, say so briefly.';
       void orchestrator.handleMessage({
         id: randomUUID(),
+        // Deliver the synthesis to the owner (channelId) but DON'T attribute the trigger to him —
+        // a scheduled digest is system-originated, not something Mohsen said. Using a system sender
+        // keeps his conversation memory clean and keeps this path clear of the owner-gate entirely.
         channelId: digestOwner,
         channelType: "telegram",
-        senderId: digestOwner,
-        senderName: "Mohsen",
+        senderId: "corra-system",
+        senderName: "Corra (scheduled)",
         content: { text: prompt },
         timestamp: new Date().toISOString(),
       });

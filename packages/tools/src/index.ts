@@ -38,3 +38,4 @@ export * from "./corra/x-draft-queue.js";
 export * from "./corra/knowledge-queue.js";
 export * from "./corra/supersede.js";
 export * from "./corra/persona-identity.js";
+export * from "./coerce.js";

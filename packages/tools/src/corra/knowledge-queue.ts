@@ -2,6 +2,7 @@ import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { z } from "zod";
 import type { MemoryBackend } from "@hairyclaw/memory";
+import { splitCsv } from "../coerce.js";
 import type { Tool, ToolContext } from "../types.js";
 
 export interface Candidate {
@@ -150,12 +151,7 @@ const toolSchema = z.object({
   action: z.enum(["draft", "list"]),
   title: z.string().optional(),
   content: z.string().optional(),
-  tags: z
-    .preprocess(
-      (v) => (typeof v === "string" ? v.split(",").map((s) => s.trim()).filter(Boolean) : v),
-      z.array(z.string()),
-    )
-    .optional(),
+  tags: z.preprocess(splitCsv, z.array(z.string())).optional(),
 });
 
 export const createKnowledgeQueueTool = (): Tool => ({

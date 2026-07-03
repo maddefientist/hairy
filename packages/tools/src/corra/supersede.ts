@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import type { MemoryBackend } from "@hairyclaw/memory";
+import { splitCsv } from "../coerce.js";
 import type { Tool, ToolContext } from "../types.js";
 
 export interface SupersedeDeps {
@@ -13,12 +14,7 @@ export interface SupersedeDeps {
 const supersedeSchema = z.object({
   query: z.string().describe("text that locates the outdated knowledge item to correct"),
   newContent: z.string().describe("the corrected/updated content that replaces it"),
-  tags: z
-    .preprocess(
-      (v) => (typeof v === "string" ? v.split(",").map((s) => s.trim()).filter(Boolean) : v),
-      z.array(z.string()),
-    )
-    .optional(),
+  tags: z.preprocess(splitCsv, z.array(z.string())).optional(),
 });
 
 const hiveHeaders = (apiKey?: string): Record<string, string> => ({
