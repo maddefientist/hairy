@@ -93,6 +93,7 @@ import {
   rejectKnowledge,
   listCandidates,
   formatCandidateList,
+  createDistillTool,
   createSupersedeTool,
   ensureCorraIdentity,
   collectHealth,
@@ -873,6 +874,12 @@ const main = async (): Promise<void> => {
     registry.register(createDigestTool({ memory: memoryBackend }));
     registry.register(createXDraftQueueTool());
     registry.register(createKnowledgeQueueTool());
+    registry.register(
+      createDistillTool({
+        hiveApiUrl: process.env.HARI_HIVE_URL ?? "http://192.168.1.225:8088",
+        hiveApiKey: process.env.HARI_HIVE_WRITE_API_KEY ?? process.env.HARI_HIVE_API_KEY,
+      }),
+    );
     registry.register(
       createSupersedeTool({
         backend: memoryBackend,
