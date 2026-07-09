@@ -139,4 +139,60 @@ describe("corra_distill", () => {
     ).rejects.toThrow();
     expect(fetchMock).not.toHaveBeenCalled();
   });
+
+  it("skips malformed lessons without crashing; drafts only valid ones", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "corra-distill-"));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          provenance: { source_url: "https://youtube.com/x" },
+          transcript_ref: "sha256:z",
+          lessons: [
+            { claim: "Good lesson", citation: "1:00", memory_type: "skill", confidence: 0.8 },
+            { citation: "no claim", memory_type: "fact", confidence: 0.5 }, // missing claim
+            "not-an-object", // non-object
+            { claim: "", citation: "empty", memory_type: "skill", confidence: 0.1 }, // empty claim
+          ],
+        }),
+      })) as unknown as typeof fetch,
+    );
+    const tool = createDistillTool({ hiveApiUrl: "http://hive:8088", hiveApiKey: "k" });
+    const res = await tool.execute(
+      { source_url: "https://youtube.com/x", media_type: "video" },
+      makeCtx(dir),
+    );
+    const parsed = JSON.parse(res.content);
+    expect(parsed.distilled).toBe(4);
+    expect(parsed.drafted).toBe(1);
+    expect(parsed.skipped).toBe(3);
+    const pending = await listCandidates(dir);
+    expect(pending).toHaveLength(1);
+    expect(pending[0].title).toBe("Good lesson");
+  });
+
+  it("caps oversized lesson content so the queue candidate stays bounded", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "corra-distill-"));
+    const huge = "A".repeat(50_000);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          provenance: { source_url: "https://youtube.com/x" },
+          transcript_ref: "sha256:z",
+          lessons: [{ claim: huge, citation: huge, memory_type: "skill", confidence: 0.9 }],
+        }),
+      })) as unknown as typeof fetch,
+    );
+    const tool = createDistillTool({ hiveApiUrl: "http://hive:8088", hiveApiKey: "k" });
+    await tool.execute({ source_url: "https://youtube.com/x", media_type: "video" }, makeCtx(dir));
+    const pending = await listCandidates(dir);
+    expect(pending).toHaveLength(1);
+    expect(pending[0].title.length).toBeLessThanOrEqual(120);
+    expect(pending[0].content.length).toBeLessThanOrEqual(8_000);
+  });
 });

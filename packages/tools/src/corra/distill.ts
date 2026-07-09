@@ -39,18 +39,20 @@ const buildHeaders = (apiKey?: string): Record<string, string> => {
   return headers;
 };
 
-interface DistillLesson {
-  claim: string;
-  citation: string;
-  memory_type: string;
-  confidence: number;
-}
+// Endpoint responses are untrusted at runtime — validate each lesson with zod
+// and drop malformed ones rather than letting a bad field crash the draft loop.
+const lessonSchema = z.object({
+  claim: z.string().min(1),
+  citation: z.string().default(""),
+  memory_type: z.string().default("skill"),
+  confidence: z.number().default(0),
+});
 
-interface DistillResponse {
-  provenance: { source_url?: string };
-  transcript_ref: string;
-  lessons: DistillLesson[];
-}
+// Length caps so an oversized endpoint field can't create an unbounded
+// knowledge-queue candidate (the ingest backend caps content at 20k).
+const MAX_TITLE = 120;
+const MAX_FIELD = 2_000;
+const MAX_CONTENT = 8_000;
 
 export const createDistillTool = (deps: DistillDeps): Tool => ({
   name: "corra_distill",
@@ -85,16 +87,32 @@ export const createDistillTool = (deps: DistillDeps): Tool => ({
       };
     }
 
-    const payload = (await res.json()) as DistillResponse;
-    const lessons = Array.isArray(payload.lessons) ? payload.lessons : [];
+    const payload = (await res.json()) as {
+      provenance?: { source_url?: string };
+      transcript_ref?: unknown;
+      lessons?: unknown;
+    };
+    const rawLessons = Array.isArray(payload.lessons) ? payload.lessons : [];
     const transcript_ref = typeof payload.transcript_ref === "string" ? payload.transcript_ref : "";
     const sourceUrl = payload.provenance?.source_url;
 
     let drafted = 0;
-    for (const lesson of lessons) {
-      const content = `${lesson.claim}\n\nSource: ${sourceUrl ?? "n/a"} @ ${lesson.citation}\nconfidence: ${lesson.confidence}`;
+    let skipped = 0;
+    for (const raw of rawLessons) {
+      const parsed = lessonSchema.safeParse(raw);
+      if (!parsed.success) {
+        skipped++;
+        continue; // malformed lesson — skip, never crash the loop
+      }
+      const lesson = parsed.data;
+      const claim = lesson.claim.slice(0, MAX_FIELD);
+      const citation = lesson.citation.slice(0, MAX_FIELD);
+      const content = `${claim}\n\nSource: ${sourceUrl ?? "n/a"} @ ${citation}\nconfidence: ${lesson.confidence}`.slice(
+        0,
+        MAX_CONTENT,
+      );
       await addCandidate(ctx.dataDir, {
-        title: lesson.claim.slice(0, 120),
+        title: claim.slice(0, MAX_TITLE),
         content,
         tags: ["corra:intake", input.media_type, lesson.memory_type],
       });
@@ -103,8 +121,9 @@ export const createDistillTool = (deps: DistillDeps): Tool => ({
 
     return {
       content: JSON.stringify({
-        distilled: lessons.length,
+        distilled: rawLessons.length,
         drafted,
+        skipped,
         transcript_ref,
         note: "Review with corra_knowledge_queue list, then owner /promote to claude-shared.",
       }),
