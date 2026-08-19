@@ -23,6 +23,17 @@ describe("ModelCatalog", () => {
     expect(grok?.unavailableReason).toBeUndefined();
   });
 
+  it("catalogs Grok 4.20 non-reasoning and reasoning variants alongside Grok 4.6", () => {
+    const catalog = new ModelCatalog();
+    expect(catalog.get("supergrok/grok-4.6")).toBeDefined();
+    const nonReasoning = catalog.get("supergrok/grok-4.20-0309-non-reasoning");
+    const reasoning = catalog.get("supergrok/grok-4.20-0309-reasoning");
+    expect(nonReasoning?.available).toBe(true);
+    expect(nonReasoning?.provider).toBe("supergrok");
+    expect(reasoning?.available).toBe(true);
+    expect(reasoning?.provider).toBe("supergrok");
+  });
+
   it("catalogs the Kimi Ollama route, MiniMax M3, GLM 5.2, and local Qwen", () => {
     const catalog = new ModelCatalog();
     expect(catalog.get("ollama/kimi-k2.6:cloud")?.available).toBe(true);
@@ -67,6 +78,13 @@ describe("reconcileCatalogWithProviders", () => {
     const entries = reconcileCatalogWithProviders({ constructedProviders: ["supergrok"] });
     const catalog = new ModelCatalog(entries);
     expect(catalog.isSelectable("supergrok/grok-4.6")).toBe(true);
+  });
+
+  it("makes Grok 4.20 non-reasoning and reasoning variants selectable once SuperGrok is constructed", () => {
+    const entries = reconcileCatalogWithProviders({ constructedProviders: ["supergrok"] });
+    const catalog = new ModelCatalog(entries);
+    expect(catalog.isSelectable("supergrok/grok-4.20-0309-non-reasoning")).toBe(true);
+    expect(catalog.isSelectable("supergrok/grok-4.20-0309-reasoning")).toBe(true);
   });
 
   it("keeps an entry available only when both provisioned flag and constructed provider agree", () => {
@@ -193,6 +211,38 @@ describe("resolveModelChain", () => {
       { provider: "supergrok", model: "grok-4.6" },
     ]);
     expect(result.warnings.length).toBe(1);
+  });
+
+  it("resolves the sanitized recommended brain routing: fast Grok 4.20 non-reasoning with non-Anthropic Ollama fallbacks", () => {
+    const result = resolveModelChain({
+      catalog,
+      requestedPrimaryId: "supergrok/grok-4.20-0309-non-reasoning",
+      fallbackIds: ["ollama/glm-5.2:cloud", "ollama/minimax-m3:cloud"],
+      safeDefaultId,
+    });
+    expect(result.chain).toEqual([
+      { provider: "supergrok", model: "grok-4.20-0309-non-reasoning" },
+      { provider: "ollama", model: "glm-5.2:cloud" },
+      { provider: "ollama", model: "minimax-m3:cloud" },
+    ]);
+    expect(result.warnings).toEqual([]);
+  });
+
+  it("resolves the sanitized recommended hands routing: Grok 4.6 with a coding fallback then a local last resort", () => {
+    const result = resolveModelChain({
+      catalog,
+      requestedPrimaryId: "supergrok/grok-4.6",
+      fallbackIds: ["ollama/glm-5.2:cloud", "ollama/deepseek-v4-flash:cloud", "ollama/qwen3.8:27b"],
+      safeDefaultId,
+    });
+    expect(result.chain).toEqual([
+      { provider: "supergrok", model: "grok-4.6" },
+      { provider: "ollama", model: "glm-5.2:cloud" },
+      { provider: "ollama", model: "deepseek-v4-flash:cloud" },
+      { provider: "ollama", model: "qwen3.8:27b" },
+    ]);
+    expect(result.chain.every((entry) => entry.provider !== "anthropic")).toBe(true);
+    expect(result.warnings).toEqual([]);
   });
 
   it("deduplicates fallback ids already selected as primary", () => {

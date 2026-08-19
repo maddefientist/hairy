@@ -40,6 +40,12 @@ const entry = (
  */
 export const DEFAULT_MODEL_CATALOG: ModelCatalogEntry[] = [
   entry("supergrok", "grok-4.6", "Grok 4.6 (SuperGrok OAuth)"),
+  entry(
+    "supergrok",
+    "grok-4.20-0309-non-reasoning",
+    "Grok 4.20 (0309, non-reasoning, SuperGrok OAuth — fast conversational)",
+  ),
+  entry("supergrok", "grok-4.20-0309-reasoning", "Grok 4.20 (0309, reasoning, SuperGrok OAuth)"),
   entry("ollama", "kimi-k2.6:cloud", "Kimi K2.6 (Ollama fallback)"),
   entry("ollama", "minimax-m3:cloud", "MiniMax M3 (Ollama Cloud)"),
   entry("ollama", "glm-5.2:cloud", "GLM 5.2 (Ollama Cloud)"),

@@ -16,7 +16,8 @@ Hairy supports two agent execution modes, configured with `[agent].mode` in
   - **hands** — the technical executor for coding, system design, debugging,
     and explicitly delegated machine exploration. Gets the configured
     technical tool profile (`[executor].tools`: `bash`, `read`, `write`,
-    `edit`, `web_search`, `web_fetch` by default).
+    `edit`, `web-search`, `web-fetch` by default; legacy `web_search` /
+    `web_fetch` spellings in config are still accepted and canonicalized).
 
 Simple chat always runs on brain. Technical work only ever reaches hands
 through an explicit `delegate` tool call from brain. A provider failure
@@ -36,15 +37,54 @@ fallback_models = ["ollama/example-brain-fallback:cloud"]
 tools = ["delegate", "memory_recall", "memory_ingest"]
 temperature = 0.7
 max_tokens = 4096
+thinking_level = "off"   # optional — explicit non-thinking brain (see below)
 
 [executor]
 model = "ollama/example-hands-coder:cloud" # provider/model — hands' configured default
 fallback_models = ["ollama/example-hands-fallback:cloud"]
-tools = ["bash", "read", "write", "edit", "web_search", "web_fetch"]
+tools = ["bash", "read", "write", "edit", "web-search", "web-fetch"]
 temperature = 0.1
 max_tokens = 4096
 max_iterations = 15
 ```
+
+### Recommended sanitized routing (this deployment's `config/default.toml`)
+
+```toml
+[orchestrator]
+model = "supergrok/grok-4.20-0309-non-reasoning"
+fallback_models = ["ollama/glm-5.2:cloud", "ollama/minimax-m3:cloud"]
+thinking_level = "off"
+
+[executor]
+model = "supergrok/grok-4.6"
+fallback_models = ["ollama/glm-5.2:cloud", "ollama/deepseek-v4-flash:cloud", "ollama/qwen3.8:27b"]
+```
+
+Brain runs the fast, non-reasoning Grok 4.20 variant with `thinking_level =
+"off"`, falling back only to non-Anthropic Ollama-routed models. Hands runs
+Grok 4.6, falling back to a non-Anthropic coding model then a local model as
+a last resort. `supergrok/grok-4.20-0309-reasoning` is also catalogued for
+deployments that want a reasoning-capable brain fallback instead.
+
+### Explicit per-role thinking control
+
+`[orchestrator].thinking_level` / `[executor].thinking_level` (optional,
+`"off" | "low" | "medium" | "high"`) control the `thinkingLevel` sent to the
+model for that role. Left unset by default for hands — the deliberate,
+careful executor policy is unchanged unless a deployment opts in explicitly.
+For Ollama-routed models, an explicit `"off"` is always sent as `think:
+false` (never omitted), since Ollama enables thinking by default for models
+that support it.
+
+### Configured tool name validation
+
+`[orchestrator].tools` / `[executor].tools` are validated against the actual
+registered tool names at startup. Legacy underscore spellings (`web_search`,
+`web_fetch`) are still accepted and canonicalized to the registered
+hyphenated names (`web-search`, `web-fetch`); any other unrecognized tool
+name fails startup with an explicit error rather than being silently
+dropped.
 
 `[orchestrator].model` / `[executor].model` (or the `ORCHESTRATOR_MODEL` /
 `EXECUTOR_MODEL` env vars) are **seed values only**. They set the durable
@@ -244,7 +284,7 @@ tools = ["delegate", "memory_recall", "memory_ingest"]
 [executor]
 model = ""   # left empty here on purpose — set via EXECUTOR_MODEL env var
 fallback_models = []
-tools = ["bash", "read", "write", "edit", "web_search", "web_fetch"]
+tools = ["bash", "read", "write", "edit", "web-search", "web-fetch"]
 ```
 
 Replace every placeholder above (`example-brain-model`,

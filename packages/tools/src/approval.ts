@@ -57,7 +57,7 @@ export const DEFAULT_APPROVAL_POLICY: ApprovalPolicy = {
       reason: "system path write",
     },
   ],
-  autoAllow: ["read", "memory_recall", "memory_ingest", "web_search", "web_fetch"],
+  autoAllow: ["read", "memory_recall", "memory_ingest", "web-search", "web-fetch"],
 };
 
 export type ApprovalHandler = (request: ApprovalRequest) => Promise<ApprovalDecision>;

@@ -16,6 +16,7 @@ describe("buildSystemPrompt tool guidance", () => {
     });
 
     expect(prompt).toContain("Delegate coding, system design, debugging");
+    expect(prompt).toContain("do not repeat the same delegation again in this turn");
     expect(prompt).not.toContain("Use bash for system operations");
     expect(prompt).not.toContain("Use read to examine files");
     expect(prompt).toContain("Voice transcript (authoritative user speech)");

@@ -41,6 +41,7 @@ export const buildSystemPrompt = async (opts: SystemPromptOptions): Promise<stri
       ? [
           "- Delegate coding, system design, debugging, and machine exploration to the technical executor with a specific bounded instruction.",
           "- Do not claim delegated work succeeded until the executor returns evidence; surface failures and partial results honestly.",
+          "- If a delegation was denied or errored, do not repeat the same delegation again in this turn. Report the failure to the user or try a materially different instruction instead.",
         ]
       : []),
     ...(hasTool("bash") ? ["- Use bash for system operations — check before assuming state."] : []),

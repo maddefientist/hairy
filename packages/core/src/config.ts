@@ -99,22 +99,42 @@ const memorySchema = z.object({
   preload_max_chars: z.number().int().positive().default(2_000),
 });
 
+const thinkingLevelSchema = z.enum(["off", "low", "medium", "high"]);
+
 const orchestratorSchema = z.object({
   model: z.string().default(""),
   fallback_models: z.array(z.string().min(1)).default([]),
   tools: z.array(z.string()).default(["delegate", "memory_recall", "memory_ingest"]),
   temperature: z.number().min(0).max(2).default(0.7),
   max_tokens: z.number().int().positive().default(4096),
+  /**
+   * Optional explicit thinking level for the brain role. Left unset by
+   * default (no schema default) so an unconfigured deployment keeps
+   * whatever a provider's own default thinking behavior is; a deployment
+   * that wants a fast, non-thinking conversational brain sets this to
+   * "off" explicitly (see config/default.toml). Threaded through to
+   * AgentLoopStreamOptions.thinkingLevel — the Ollama provider sends
+   * think=false rather than omitting the field when this is "off", since
+   * Ollama otherwise defaults to thinking-enabled for supported models.
+   */
+  thinking_level: thinkingLevelSchema.optional(),
 });
 
 const executorSchema = z.object({
   model: z.string().default(""),
   fallback_models: z.array(z.string().min(1)).default([]),
-  tools: z.array(z.string()).default(["bash", "read", "write", "edit", "web_search", "web_fetch"]),
+  tools: z.array(z.string()).default(["bash", "read", "write", "edit", "web-search", "web-fetch"]),
   temperature: z.number().min(0).max(2).default(0.1),
   max_tokens: z.number().int().positive().default(4096),
   max_iterations: z.number().int().positive().default(CHILD_MAX_ITERATIONS),
   system_prompt: z.string().default(""),
+  /**
+   * Optional explicit thinking level for the hands role. Left unset by
+   * default, deliberately — hands is the careful/deliberate executor and
+   * its existing (provider-default) thinking behavior is not changed by
+   * this feature. Set explicitly only if a deployment wants to override it.
+   */
+  thinking_level: thinkingLevelSchema.optional(),
 });
 
 const configSchema = z.object({
@@ -135,7 +155,7 @@ const configSchema = z.object({
   executor: executorSchema.default({
     model: "",
     fallback_models: [],
-    tools: ["bash", "read", "write", "edit", "web_search", "web_fetch"],
+    tools: ["bash", "read", "write", "edit", "web-search", "web-fetch"],
     temperature: 0.1,
     max_tokens: 4096,
     max_iterations: CHILD_MAX_ITERATIONS,

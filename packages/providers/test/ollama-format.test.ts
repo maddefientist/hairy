@@ -249,7 +249,10 @@ describe("createOllamaProvider", () => {
   });
 
   it("sends num_ctx when contextWindow is configured", async () => {
-    const provider = createOllamaProvider({ baseUrl: "http://localhost:11434", contextWindow: 131072 });
+    const provider = createOllamaProvider({
+      baseUrl: "http://localhost:11434",
+      contextWindow: 131072,
+    });
     let capturedBody: Record<string, unknown> = {};
     global.fetch = vi.fn().mockImplementation(async (_url, init) => {
       capturedBody = JSON.parse(init?.body as string) as Record<string, unknown>;
@@ -268,6 +271,69 @@ describe("createOllamaProvider", () => {
 
     const opts = capturedBody.options as Record<string, unknown>;
     expect(opts?.num_ctx).toBe(131072);
+  });
+
+  it("sends think=false explicitly when thinkingLevel is off (never omits the field)", async () => {
+    const provider = createOllamaProvider({ baseUrl: "http://localhost:11434" });
+    let capturedBody: Record<string, unknown> = {};
+    global.fetch = vi.fn().mockImplementation(async (_url, init) => {
+      capturedBody = JSON.parse(init?.body as string) as Record<string, unknown>;
+      return {
+        ok: true,
+        json: async () => ({ message: { role: "assistant", content: "ok" }, done: true }),
+      };
+    });
+
+    for await (const _ of provider.stream(
+      [{ role: "user", content: [{ type: "text", text: "hi" }] }],
+      { model: "glm-5.2:cloud", thinkingLevel: "off" },
+    )) {
+      // drain
+    }
+
+    expect(capturedBody.think).toBe(false);
+  });
+
+  it("omits think when thinkingLevel is unset, leaving the model's own default behavior", async () => {
+    const provider = createOllamaProvider({ baseUrl: "http://localhost:11434" });
+    let capturedBody: Record<string, unknown> = {};
+    global.fetch = vi.fn().mockImplementation(async (_url, init) => {
+      capturedBody = JSON.parse(init?.body as string) as Record<string, unknown>;
+      return {
+        ok: true,
+        json: async () => ({ message: { role: "assistant", content: "ok" }, done: true }),
+      };
+    });
+
+    for await (const _ of provider.stream(
+      [{ role: "user", content: [{ type: "text", text: "hi" }] }],
+      { model: "glm-5.2:cloud" },
+    )) {
+      // drain
+    }
+
+    expect(capturedBody.think).toBeUndefined();
+  });
+
+  it("sends think=<level> for a non-off thinking level", async () => {
+    const provider = createOllamaProvider({ baseUrl: "http://localhost:11434" });
+    let capturedBody: Record<string, unknown> = {};
+    global.fetch = vi.fn().mockImplementation(async (_url, init) => {
+      capturedBody = JSON.parse(init?.body as string) as Record<string, unknown>;
+      return {
+        ok: true,
+        json: async () => ({ message: { role: "assistant", content: "ok" }, done: true }),
+      };
+    });
+
+    for await (const _ of provider.stream(
+      [{ role: "user", content: [{ type: "text", text: "hi" }] }],
+      { model: "glm-5.2:cloud", thinkingLevel: "high" },
+    )) {
+      // drain
+    }
+
+    expect(capturedBody.think).toBe("high");
   });
 
   it("listModels returns empty array on fetch error", async () => {

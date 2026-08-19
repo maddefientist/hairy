@@ -101,6 +101,7 @@ import {
   createWriteTool,
   failClosedApprovalHandler,
   primaryOperatorProfile,
+  resolveConfiguredToolNames,
   setReminderCallback,
   toolParametersToJsonSchema,
 } from "@hairyclaw/tools";
@@ -332,7 +333,10 @@ export const parseModelSpec = (
 };
 
 /** Build a structured executor system prompt that small/local models can follow reliably. */
-const buildExecutorSystemPrompt = (toolDefs: AgentLoopToolDef[], context?: string): string => {
+export const buildExecutorSystemPrompt = (
+  toolDefs: AgentLoopToolDef[],
+  context?: string,
+): string => {
   const toolList = toolDefs.map((t) => `  - ${t.name}: ${t.description}`).join("\n");
 
   const sections = [
@@ -346,6 +350,8 @@ const buildExecutorSystemPrompt = (toolDefs: AgentLoopToolDef[], context?: strin
     "4. After completing the work, respond with a SHORT summary of what you did and the results.",
     "5. If a tool call fails, try ONE alternative approach. If that also fails, report the error.",
     "6. Do NOT explain your reasoning. Just do the work and report results.",
+    "7. For web research (fetching a URL or searching the web), use the web-search / web-fetch tools directly. Do NOT use bash with curl, wget, or other network commands for this — those are blocked by policy and will be denied.",
+    "8. If the same tool call is denied or errors twice in a row, do not retry it a third time — report the failure instead of repeating it.",
     "",
     "# YOUR TOOLS",
     toolList,
@@ -380,6 +386,8 @@ const createDelegateTool = (deps: {
   executorMaxTokens: number;
   executorMaxIterations: number;
   executorSystemPromptOverride: string;
+  /** Unset = hands keeps its provider-default (deliberate) thinking behavior. */
+  executorThinkingLevel?: "off" | "low" | "medium" | "high";
   registry: ToolRegistry;
   logger: HairyClawLogger;
   dataDir: string;
@@ -397,6 +405,8 @@ const createDelegateTool = (deps: {
     "  BAD:  'Help me understand the codebase'",
     "",
     "The executor is a FAST, LITERAL tool-runner — not a thinker. Give it exact commands.",
+    "For network research, the executor uses web-search/web-fetch, not bash curl/wget (blocked by policy).",
+    "If a delegated instruction was just denied or errored, do not delegate the same instruction again this turn — report the failure instead.",
   ].join("\n"),
   parameters: z.object({
     instruction: z
@@ -465,6 +475,7 @@ const createDelegateTool = (deps: {
           tools: deps.executorToolDefs,
           temperature: deps.executorTemperature,
           maxTokens: deps.executorMaxTokens,
+          thinkingLevel: deps.executorThinkingLevel,
         },
         logger: deps.logger,
         maxIterations: deps.executorMaxIterations,
@@ -1334,7 +1345,15 @@ const main = async (): Promise<void> => {
     brainGateway = buildGatewayForChain(resolveActiveChainForRole("brain").chain);
     handsGateway = buildGatewayForChain(resolveActiveChainForRole("hands").chain);
 
-    const executorToolNames = new Set(config.executorConfig.tools);
+    // Configured tool names are validated + canonicalized before use: legacy
+    // underscore aliases (web_search/web_fetch) resolve to the actually
+    // registered hyphenated tool names (web-search/web-fetch), and any
+    // truly unknown configured name throws here — before agent startup —
+    // rather than being silently filtered out of the executor's tool set.
+    const registeredToolNames = registry.list().map((tool) => tool.name);
+    const executorToolNames = new Set(
+      resolveConfiguredToolNames(config.executorConfig.tools, registeredToolNames),
+    );
     const executorTools = registry.list().filter((tool) => executorToolNames.has(tool.name));
     const executorToolDefs = executorTools.map(toolToDefinition);
 
@@ -1350,6 +1369,7 @@ const main = async (): Promise<void> => {
       executorMaxTokens: config.executorConfig.maxTokens,
       executorMaxIterations: config.executorConfig.maxIterations,
       executorSystemPromptOverride: config.executorConfig.systemPrompt,
+      executorThinkingLevel: config.executorConfig.thinkingLevel,
       registry,
       logger,
       dataDir: config.dataDir,
@@ -1361,8 +1381,15 @@ const main = async (): Promise<void> => {
     // named in [orchestrator].tools (delegate + memory by default). Brain
     // never silently inherits the full execution tool surface: technical
     // work is an explicit delegation decision (the "delegate" tool call
-    // above), not an implicit fallback.
-    const orchestratorToolNames = new Set(config.orchestratorConfig.tools);
+    // above), not an implicit fallback. Same alias/validation as executor
+    // tools above — recomputed against the registry now that "delegate"
+    // (registered just above) is itself a valid, resolvable tool name.
+    const orchestratorToolNames = new Set(
+      resolveConfiguredToolNames(
+        config.orchestratorConfig.tools,
+        registry.list().map((tool) => tool.name),
+      ),
+    );
     toolDefs = registry
       .list()
       .filter((tool) => orchestratorToolNames.has(tool.name))
@@ -2258,6 +2285,10 @@ const main = async (): Promise<void> => {
           temperature: isOrchestratorMode ? config.orchestratorConfig.temperature : undefined,
           maxTokens: isOrchestratorMode ? config.orchestratorConfig.maxTokens : 4096,
           timeoutMs: config.resilience.requestTimeoutMs,
+          // Only the brain role has an explicit thinking-level policy today
+          // (fast, non-thinking conversational controller); unified mode is
+          // unaffected and keeps provider-default thinking behavior.
+          thinkingLevel: isOrchestratorMode ? config.orchestratorConfig.thinkingLevel : undefined,
         },
         logger,
         metrics,

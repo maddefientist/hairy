@@ -217,7 +217,13 @@ export const createOllamaProvider = (opts: OllamaOptions = {}): Provider => {
         },
       };
 
-      if (streamOpts.thinkingLevel && streamOpts.thinkingLevel !== "off") {
+      // Ollama enables thinking by default for models that support it, so
+      // an explicit "off" must be sent as think=false rather than omitted —
+      // omitting the field would silently re-enable thinking instead of
+      // honoring the caller's request to turn it off.
+      if (streamOpts.thinkingLevel === "off") {
+        requestBody.think = false;
+      } else if (streamOpts.thinkingLevel) {
         requestBody.think = streamOpts.thinkingLevel;
       }
 

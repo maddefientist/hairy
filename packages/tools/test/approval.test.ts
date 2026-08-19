@@ -35,9 +35,9 @@ describe("ApprovalGate", () => {
       expect(decision).toBe("allow");
     });
 
-    it("allows web_search without approval", async () => {
+    it("allows web-search without approval", async () => {
       const gate = new ApprovalGate(DEFAULT_APPROVAL_POLICY, strictApprovalHandler, noopLogger);
-      const decision = await gate.check("web_search", { q: "test" });
+      const decision = await gate.check("web-search", { q: "test" });
 
       expect(decision).toBe("allow");
     });

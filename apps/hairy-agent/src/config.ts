@@ -67,12 +67,16 @@ interface ProviderRuntimeConfig {
   authFile?: string;
 }
 
+export type ThinkingLevel = "off" | "low" | "medium" | "high";
+
 export interface OrchestratorModeConfig {
   model: string; // "provider/model" e.g. "openrouter/glm-5:cloud"
   fallbackModels: string[];
   tools: string[]; // tool names the orchestrator gets
   temperature: number;
   maxTokens: number;
+  /** Unset = provider's own default thinking behavior. */
+  thinkingLevel?: ThinkingLevel;
 }
 
 export interface ExecutorModeConfig {
@@ -83,6 +87,8 @@ export interface ExecutorModeConfig {
   maxTokens: number;
   maxIterations: number;
   systemPrompt: string; // custom override — empty = use built-in structured prompt
+  /** Unset = provider's own default (deliberate/careful) thinking behavior. */
+  thinkingLevel?: ThinkingLevel;
 }
 
 export interface HairyClawRuntimeConfig {
@@ -281,6 +287,7 @@ export const loadHairyClawConfig = async (): Promise<HairyClawRuntimeConfig> => 
       tools: base.orchestrator.tools,
       temperature: base.orchestrator.temperature,
       maxTokens: base.orchestrator.max_tokens,
+      thinkingLevel: base.orchestrator.thinking_level,
     },
     executorConfig: {
       model: executorModel,
@@ -291,6 +298,7 @@ export const loadHairyClawConfig = async (): Promise<HairyClawRuntimeConfig> => 
       maxTokens: base.executor.max_tokens,
       maxIterations: base.executor.max_iterations,
       systemPrompt: process.env.EXECUTOR_SYSTEM_PROMPT ?? base.executor.system_prompt ?? "",
+      thinkingLevel: base.executor.thinking_level,
     },
     providers,
     routing: {

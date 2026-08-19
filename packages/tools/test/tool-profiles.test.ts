@@ -4,7 +4,9 @@ import {
   DEFAULT_CHILD_DENY_LIST,
   PRIMARY_OPERATOR_PROFILE,
   buildChildProfile,
+  canonicalizeToolName,
   primaryOperatorProfile,
+  resolveConfiguredToolNames,
 } from "../src/tool-profiles.js";
 
 const ALL_TOOLS = [
@@ -12,8 +14,8 @@ const ALL_TOOLS = [
   "read",
   "write",
   "edit",
-  "web_search",
-  "web_fetch",
+  "web-search",
+  "web-fetch",
   "browser",
   "reminder",
   "ssh_exec",
@@ -49,8 +51,8 @@ describe("buildChildProfile", () => {
         "read",
         "write",
         "edit",
-        "web_search",
-        "web_fetch",
+        "web-search",
+        "web-fetch",
         "reminder",
         "memory_recall",
         "memory_ingest",
@@ -76,5 +78,66 @@ describe("buildChildProfile", () => {
   it("never grants a tool that is not in the full registry list", () => {
     const profile = buildChildProfile(["read", "write"]);
     expect(profile.allowedTools).toEqual(["read", "write"]);
+  });
+});
+
+describe("canonicalizeToolName", () => {
+  it("maps legacy underscore web tool spellings to the registered hyphenated names", () => {
+    expect(canonicalizeToolName("web_search")).toBe("web-search");
+    expect(canonicalizeToolName("web_fetch")).toBe("web-fetch");
+  });
+
+  it("passes through already-canonical and unrelated names unchanged", () => {
+    expect(canonicalizeToolName("web-search")).toBe("web-search");
+    expect(canonicalizeToolName("bash")).toBe("bash");
+  });
+});
+
+describe("resolveConfiguredToolNames", () => {
+  const REGISTERED = ["bash", "read", "write", "edit", "web-search", "web-fetch", "delegate"];
+
+  it("passes through configured names that already match registered tools", () => {
+    expect(resolveConfiguredToolNames(["bash", "read"], REGISTERED)).toEqual(["bash", "read"]);
+  });
+
+  it("canonicalizes legacy web_search/web_fetch config spellings to the registered tools", () => {
+    const resolved = resolveConfiguredToolNames(
+      ["bash", "read", "write", "edit", "web_search", "web_fetch"],
+      REGISTERED,
+    );
+    expect(resolved).toEqual(["bash", "read", "write", "edit", "web-search", "web-fetch"]);
+  });
+
+  it("exposes the actual registered web-search/web-fetch tools from legacy config", () => {
+    const resolved = resolveConfiguredToolNames(["web_search", "web_fetch"], REGISTERED);
+    expect(resolved).toContain("web-search");
+    expect(resolved).toContain("web-fetch");
+    for (const name of resolved) {
+      expect(REGISTERED).toContain(name);
+    }
+  });
+
+  it("deduplicates when both a legacy alias and its canonical form are configured", () => {
+    expect(resolveConfiguredToolNames(["web_search", "web-search"], REGISTERED)).toEqual([
+      "web-search",
+    ]);
+  });
+
+  it("throws for a truly unknown configured tool name instead of silently dropping it", () => {
+    expect(() => resolveConfiguredToolNames(["bash", "not_a_real_tool"], REGISTERED)).toThrow(
+      /Unknown configured tool name/,
+    );
+  });
+
+  it("throws naming the unresolvable tool so the failure is actionable", () => {
+    expect(() => resolveConfiguredToolNames(["frobnicate"], REGISTERED)).toThrow(/frobnicate/);
+  });
+
+  it("fails startup validation rather than filtering an unknown name out of the tool set", () => {
+    let resolved: string[] | undefined;
+    expect(() => {
+      resolved = resolveConfiguredToolNames(["bash", "bogus"], REGISTERED);
+    }).toThrow();
+    expect(resolved).toBeUndefined();
   });
 });

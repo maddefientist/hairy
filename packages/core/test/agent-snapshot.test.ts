@@ -81,11 +81,11 @@ describe("Agent Snapshot", () => {
         messagesSummary: "summary",
         activeTools: [
           { name: "bash", description: "Run bash", parameters: {} },
-          { name: "web_search", description: "Search web", parameters: {} },
+          { name: "web-search", description: "Search web", parameters: {} },
         ],
       });
 
-      expect(snapshot.activeTools).toEqual(["bash", "web_search"]);
+      expect(snapshot.activeTools).toEqual(["bash", "web-search"]);
     });
 
     it("includes execution metadata", () => {

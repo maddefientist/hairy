@@ -71,7 +71,7 @@ tools = ["delegate", "memory_recall", "memory_ingest"]
 
 [executor]
 model = ""          # e.g. "ollama/qwen3.5:9b"
-tools = ["bash", "read", "write", "edit", "web_search", "web_fetch"]
+tools = ["bash", "read", "write", "edit", "web-search", "web-fetch"]
 temperature = 0.1
 max_iterations = 5
 

@@ -15,26 +15,41 @@ mode = "unified"
 # mode — see docs/model-roles.md for runtime selection, independent
 # fallbacks, /model brain|hands commands, migration, and rollback.
 [orchestrator]
-# provider/model for the brain — cloud model with strong reasoning
-model = ""
-fallback_models = []
+# provider/model for the brain — fast conversational controller/planner.
+# Recommended sanitized routing: non-reasoning Grok 4.20 primary, with
+# non-Anthropic Ollama fallbacks. Only takes effect when [agent].mode =
+# "orchestrator" — these are seed values for the durable brain selection
+# (see docs/model-roles.md).
+model = "supergrok/grok-4.20-0309-non-reasoning"
+fallback_models = ["ollama/glm-5.2:cloud", "ollama/minimax-m3:cloud"]
 # Tools the orchestrator gets (delegate + memory by default)
 tools = ["delegate", "memory_recall", "memory_ingest"]
 temperature = 0.7
 max_tokens = 4096
+# Explicit non-thinking brain: fast conversational controller, delegates
+# deep technical reasoning to hands rather than "thinking" itself. Sent to
+# Ollama fallbacks as think=false (never omitted — Ollama enables thinking
+# by default for supported models).
+thinking_level = "off"
 
 [executor]
-# provider/model for the hands — can be a smaller/local model
-model = ""
-fallback_models = []
+# provider/model for the hands — technical executor (coding, system design,
+# debugging). Recommended sanitized routing: Grok 4.6 primary, with
+# non-Anthropic Ollama fallbacks (a coding-oriented cloud model, then a
+# local model as last resort).
+model = "supergrok/grok-4.6"
+fallback_models = ["ollama/glm-5.2:cloud", "ollama/deepseek-v4-flash:cloud", "ollama/qwen3.8:27b"]
 # Tools the executor gets (system tools by default)
-tools = ["bash", "read", "write", "edit", "web_search", "web_fetch"]
+tools = ["bash", "read", "write", "edit", "web-search", "web-fetch"]
 temperature = 0.1
 max_tokens = 4096
 # Single source of truth: CHILD_MAX_ITERATIONS in packages/core/src/iteration-limits.ts
 max_iterations = 15
 # Optional: override the executor system prompt entirely (leave empty for default)
 system_prompt = ""
+# Deliberately left unset: hands keeps its careful, deliberate default
+# thinking behavior — this feature does not change executor policy.
+# thinking_level = "off"
 
 [health]
 port = 9090
