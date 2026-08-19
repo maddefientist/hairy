@@ -10,18 +10,37 @@ const execFileAsync = promisify(execFile);
 
 const videoInputSchema = z.object({
   path: z.string().min(1).describe("Absolute path to the video file to analyse."),
-  frames: z.number().int().min(1).max(10).default(4).optional().describe("Number of frames to extract (1–10, default 4)."),
+  frames: z.coerce
+    .number()
+    .int()
+    .min(1)
+    .max(10)
+    .default(4)
+    .optional()
+    .describe("Number of frames to extract (1–10, default 4)."),
 });
 
-const probeVideo = async (path: string): Promise<{ duration: string; codec: string; width: number; height: number } | null> => {
+const probeVideo = async (
+  path: string,
+): Promise<{ duration: string; codec: string; width: number; height: number } | null> => {
   try {
     const { stdout } = await execFileAsync("ffprobe", [
-      "-v", "quiet",
-      "-print_format", "json",
+      "-v",
+      "quiet",
+      "-print_format",
+      "json",
       "-show_streams",
       path,
     ]);
-    const parsed = JSON.parse(stdout) as { streams?: Array<{ codec_type: string; codec_name: string; width?: number; height?: number; duration?: string }> };
+    const parsed = JSON.parse(stdout) as {
+      streams?: Array<{
+        codec_type: string;
+        codec_name: string;
+        width?: number;
+        height?: number;
+        duration?: string;
+      }>;
+    };
     const video = parsed.streams?.find((s) => s.codec_type === "video");
     if (!video) return null;
     return {
@@ -50,7 +69,7 @@ export const createVideoExtractTool = (): Tool => ({
 
     try {
       const probe = await probeVideo(input.path);
-      const durationSec = probe ? parseFloat(probe.duration) || 0 : 0;
+      const durationSec = probe ? Number.parseFloat(probe.duration) || 0 : 0;
 
       tmpDir = await mkdtemp(join(tmpdir(), "hairy-video-"));
 
@@ -65,11 +84,16 @@ export const createVideoExtractTool = (): Tool => ({
         framePaths.push(outPath);
         try {
           await execFileAsync("ffmpeg", [
-            "-ss", String(ts),
-            "-i", input.path,
-            "-frames:v", "1",
-            "-q:v", "3",
-            "-vf", "scale=640:-1",
+            "-ss",
+            String(ts),
+            "-i",
+            input.path,
+            "-frames:v",
+            "1",
+            "-q:v",
+            "3",
+            "-vf",
+            "scale=640:-1",
             "-y",
             outPath,
           ]);
@@ -83,9 +107,17 @@ export const createVideoExtractTool = (): Tool => ({
       const result = {
         path: input.path,
         metadata: probe
-          ? { duration: `${Math.round(durationSec)}s`, codec: probe.codec, resolution: `${probe.width}x${probe.height}` }
+          ? {
+              duration: `${Math.round(durationSec)}s`,
+              codec: probe.codec,
+              resolution: `${probe.width}x${probe.height}`,
+            }
           : null,
-        frames: frames.map((f) => ({ timestampSec: f.timestampSec, mimeType: "image/jpeg", base64: f.data })),
+        frames: frames.map((f) => ({
+          timestampSec: f.timestampSec,
+          mimeType: "image/jpeg",
+          base64: f.data,
+        })),
       };
 
       return { content: JSON.stringify(result) };

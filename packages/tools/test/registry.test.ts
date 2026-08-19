@@ -127,4 +127,57 @@ describe("ToolRegistry", () => {
     expect(names).toEqual(expect.arrayContaining(["a", "b", "c"]));
     expect(names).toHaveLength(3);
   });
+
+  describe("tool profile enforcement (allowedTools)", () => {
+    it("allows a tool call when the tool is in ctx.allowedTools", async () => {
+      const registry = new ToolRegistry({ logger: noopLogger });
+      registry.register(makeTool("read", async () => ({ content: "ok" })));
+
+      const result = await registry.execute(
+        "read",
+        { input: "x" },
+        { ...testCtx, allowedTools: ["read", "write"] },
+      );
+
+      expect(result.isError).toBeFalsy();
+    });
+
+    it("denies a tool call for a tool not in ctx.allowedTools, even though it is registered", async () => {
+      const registry = new ToolRegistry({ logger: noopLogger });
+      const bash = makeTool("bash", async () => ({ content: "should not run" }));
+      registry.register(bash);
+
+      const result = await registry.execute(
+        "bash",
+        { input: "rm -rf /" },
+        { ...testCtx, allowedTools: ["read", "write"] },
+      );
+
+      expect(result.isError).toBe(true);
+      expect(result.content).toContain("not permitted");
+    });
+
+    it("does not restrict execution when ctx.allowedTools is undefined (primary operator boundary)", async () => {
+      const registry = new ToolRegistry({ logger: noopLogger });
+      registry.register(makeTool("bash", async () => ({ content: "ran" })));
+
+      const result = await registry.execute("bash", { input: "ls" }, testCtx);
+
+      expect(result.isError).toBeFalsy();
+      expect(result.content).toBe("ran");
+    });
+
+    it("an empty allowedTools list denies every tool call", async () => {
+      const registry = new ToolRegistry({ logger: noopLogger });
+      registry.register(makeTool("read", async () => ({ content: "ok" })));
+
+      const result = await registry.execute(
+        "read",
+        { input: "x" },
+        { ...testCtx, allowedTools: [] },
+      );
+
+      expect(result.isError).toBe(true);
+    });
+  });
 });

@@ -30,7 +30,6 @@ const parseIntegerEnv = (value: string | undefined): number | undefined => {
 
 const runtimeSchema = z.object({
   providerApiKeys: z.object({
-    anthropic: z.string().optional(),
     openrouter: z.string().optional(),
     gemini: z.string().optional(),
   }),
@@ -65,10 +64,12 @@ interface ProviderRuntimeConfig {
   apiKey?: string;
   baseUrl?: string;
   contextWindow?: number;
+  authFile?: string;
 }
 
 export interface OrchestratorModeConfig {
   model: string; // "provider/model" e.g. "openrouter/glm-5:cloud"
+  fallbackModels: string[];
   tools: string[]; // tool names the orchestrator gets
   temperature: number;
   maxTokens: number;
@@ -76,6 +77,7 @@ export interface OrchestratorModeConfig {
 
 export interface ExecutorModeConfig {
   model: string; // "provider/model" e.g. "ollama/qwen3.5:9b"
+  fallbackModels: string[];
   tools: string[]; // tool names the executor gets
   temperature: number;
   maxTokens: number;
@@ -94,7 +96,7 @@ export interface HairyClawRuntimeConfig {
   orchestratorConfig: OrchestratorModeConfig;
   executorConfig: ExecutorModeConfig;
   providers: {
-    anthropic: ProviderRuntimeConfig;
+    supergrok: ProviderRuntimeConfig;
     openrouter: ProviderRuntimeConfig;
     gemini: ProviderRuntimeConfig;
     ollama: ProviderRuntimeConfig;
@@ -156,6 +158,13 @@ export interface HairyClawRuntimeConfig {
   tools: {
     sidecarAutoBuild: boolean;
   };
+  /**
+   * Sender ids allowed to run mutating commands (/model use|fallback|test|rollback,
+   * /update, /clear, /approve). Empty by default — deny-safe: mutating commands
+   * are refused for everyone until an operator is explicitly configured via
+   * OPERATOR_ALLOWLIST or config/*.toml [operators].allowlist.
+   */
+  operatorAllowlist: string[];
   features: {
     executionMetadataTracking: boolean;
     standardizedTelemetry: boolean;
@@ -180,7 +189,6 @@ export const loadHairyClawConfig = async (): Promise<HairyClawRuntimeConfig> => 
 
   const runtime = runtimeSchema.parse({
     providerApiKeys: {
-      anthropic: process.env.ANTHROPIC_API_KEY,
       openrouter: process.env.OPENROUTER_API_KEY,
       gemini: process.env.GEMINI_API_KEY,
     },
@@ -213,15 +221,18 @@ export const loadHairyClawConfig = async (): Promise<HairyClawRuntimeConfig> => 
   });
 
   const providers = {
-    anthropic: {
-      enabled: base.providers.anthropic?.enabled ?? false,
-      defaultModel: base.providers.anthropic?.default_model ?? "claude-sonnet-4-20250514",
-      apiKey: runtime.providerApiKeys.anthropic,
+    supergrok: {
+      enabled: base.providers.supergrok?.enabled ?? false,
+      defaultModel: base.providers.supergrok?.default_model ?? "grok-4.6",
+      authFile:
+        process.env.SUPERGROK_AUTH_FILE ??
+        base.providers.supergrok?.auth_file ??
+        resolve(process.env.HOME ?? ".", ".config", "hairyclaw", "supergrok-auth.json"),
+      baseUrl: base.providers.supergrok?.base_url ?? "https://api.x.ai/v1",
     },
     openrouter: {
       enabled: base.providers.openrouter?.enabled ?? false,
-      defaultModel:
-        base.providers.openrouter?.default_model ?? "anthropic/claude-sonnet-4-20250514",
+      defaultModel: base.providers.openrouter?.default_model ?? "openai/gpt-oss-120b",
       apiKey: runtime.providerApiKeys.openrouter,
     },
     gemini: {
@@ -239,7 +250,7 @@ export const loadHairyClawConfig = async (): Promise<HairyClawRuntimeConfig> => 
   };
 
   const hasCloudProvider =
-    (providers.anthropic.enabled && Boolean(providers.anthropic.apiKey)) ||
+    (providers.supergrok.enabled && Boolean(providers.supergrok.authFile)) ||
     (providers.openrouter.enabled && Boolean(providers.openrouter.apiKey)) ||
     (providers.gemini.enabled && Boolean(providers.gemini.apiKey));
 
@@ -265,12 +276,16 @@ export const loadHairyClawConfig = async (): Promise<HairyClawRuntimeConfig> => 
       "unified",
     orchestratorConfig: {
       model: orchestratorModel,
+      fallbackModels:
+        toList(process.env.ORCHESTRATOR_FALLBACK_CHAIN) ?? base.orchestrator.fallback_models ?? [],
       tools: base.orchestrator.tools,
       temperature: base.orchestrator.temperature,
       maxTokens: base.orchestrator.max_tokens,
     },
     executorConfig: {
       model: executorModel,
+      fallbackModels:
+        toList(process.env.EXECUTOR_FALLBACK_CHAIN) ?? base.executor.fallback_models ?? [],
       tools: base.executor.tools,
       temperature: base.executor.temperature,
       maxTokens: base.executor.max_tokens,
@@ -348,6 +363,7 @@ export const loadHairyClawConfig = async (): Promise<HairyClawRuntimeConfig> => 
     tools: {
       sidecarAutoBuild: base.tools.sidecar.auto_build,
     },
+    operatorAllowlist: toList(process.env.OPERATOR_ALLOWLIST) ?? base.operators.allowlist ?? [],
     features: {
       executionMetadataTracking:
         parseBooleanEnv(process.env.FEATURE_EXECUTION_METADATA_TRACKING) ??

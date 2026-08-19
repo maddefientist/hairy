@@ -42,6 +42,14 @@ export class WebhookAdapter extends BaseAdapter {
       }
 
       const body = (await c.req.json()) as { channelId?: string; senderId?: string; text?: string };
+      // `senderId` here is caller-supplied JSON, not an identity the webhook
+      // secret authenticates — the shared secret proves the caller may send
+      // messages, not who they claim to be. It must never be trusted as an
+      // operator identity for mutating commands (/model use, /update, etc.).
+      // Authorization enforcement lives in the runtime's isOperator(), which
+      // must bind channelType ("webhook") + senderId and reject the webhook
+      // channel outright for operator gating — never compare this senderId
+      // against an unscoped operator allowlist.
       this.emitMessage({
         channelId: body.channelId ?? "webhook",
         channelType: "webhook",

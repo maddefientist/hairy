@@ -5,8 +5,8 @@ import type { Tool } from "../types.js";
 
 const readInputSchema = z.object({
   path: z.string().min(1),
-  offset: z.number().int().positive().optional(),
-  limit: z.number().int().positive().max(2000).optional(),
+  offset: z.coerce.number().int().positive().optional(),
+  limit: z.coerce.number().int().positive().max(2000).optional(),
 });
 
 const imageExt = new Set([".jpg", ".jpeg", ".png", ".gif", ".webp"]);

@@ -5,7 +5,23 @@ export type FailoverReason =
   | "server_error"
   | "timeout"
   | "network_error"
+  | "schema_error"
+  | "configuration_error"
   | "unknown";
+
+/**
+ * Reasons that represent a genuinely transient failure — retrying the same
+ * attempt, or trying the next entry in a fallback chain, can plausibly
+ * succeed. Every other reason (auth, schema, configuration, unknown) must
+ * fail closed: callers should stop advancing the chain and surface the
+ * failure rather than silently trying more providers.
+ */
+export const ADVANCING_FAILOVER_REASONS: ReadonlySet<FailoverReason> = new Set([
+  "rate_limit",
+  "server_error",
+  "network_error",
+  "timeout",
+]);
 
 export interface ClassifiedError {
   reason: FailoverReason;
@@ -36,6 +52,23 @@ const SERVER_ERROR_PATTERNS = [
   /gateway.?timeout/i,
 ];
 
+const SCHEMA_ERROR_PATTERNS = [
+  /invalid.?(request.?body|json|schema|parameter|argument)/i,
+  /schema.?validation/i,
+  /unprocessable.?entity/i,
+  /malformed/i,
+  /400\b/,
+  /422\b/,
+];
+
+const CONFIGURATION_ERROR_PATTERNS = [
+  /no.?auth.?profile/i,
+  /provider.?(not.?found|unavailable|not.?configured)/i,
+  /model.?(not.?found|unknown|not.?configured)/i,
+  /missing.?(api.?key|credential|configuration)/i,
+  /unknown.?provider/i,
+];
+
 export const classifyError = (error: Error): ClassifiedError => {
   const message = error.message.toLowerCase();
   const status =
@@ -54,6 +87,15 @@ export const classifyError = (error: Error): ClassifiedError => {
       suggestedDelayMs: 0,
       originalError: error,
     };
+  if (status === 400 || status === 422)
+    return { reason: "schema_error", retryable: false, suggestedDelayMs: 0, originalError: error };
+  if (status === 404)
+    return {
+      reason: "configuration_error",
+      retryable: false,
+      suggestedDelayMs: 0,
+      originalError: error,
+    };
   if (typeof status === "number" && status >= 500 && status < 600)
     return {
       reason: "server_error",
@@ -67,7 +109,7 @@ export const classifyError = (error: Error): ClassifiedError => {
     // Honour Retry-After header when provider encoded it as "retry_after:N" (seconds)
     const retryAfterMatch = message.match(/retry_after:(\d+)/);
     const suggestedDelayMs = retryAfterMatch
-      ? parseInt(retryAfterMatch[1], 10) * 1000
+      ? Number.parseInt(retryAfterMatch[1], 10) * 1000
       : 5000;
     return { reason: "rate_limit", retryable: true, suggestedDelayMs, originalError: error };
   }
@@ -80,6 +122,15 @@ export const classifyError = (error: Error): ClassifiedError => {
       suggestedDelayMs: 0,
       originalError: error,
     };
+  if (CONFIGURATION_ERROR_PATTERNS.some((p) => p.test(message)))
+    return {
+      reason: "configuration_error",
+      retryable: false,
+      suggestedDelayMs: 0,
+      originalError: error,
+    };
+  if (SCHEMA_ERROR_PATTERNS.some((p) => p.test(message)))
+    return { reason: "schema_error", retryable: false, suggestedDelayMs: 0, originalError: error };
   if (/timeout|timed?\s*out|abort/i.test(message))
     return { reason: "timeout", retryable: true, suggestedDelayMs: 1000, originalError: error };
   if (/econnrefused|enotfound|network|fetch\s*failed|unreachable/i.test(message))

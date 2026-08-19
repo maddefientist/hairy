@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { mkdirSync } from "node:fs";
-import { DatabaseSync } from "node:sqlite";
 import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 
 const SCHEMA = `
   PRAGMA journal_mode = WAL;
@@ -56,6 +56,13 @@ export interface StoredMessage {
   content: string;
 }
 
+const redactSecrets = (value: string): string =>
+  value
+    .replace(/github_pat_[A-Za-z0-9_]+/g, "github_pat_REDACTED")
+    .replace(/ghp_[A-Za-z0-9_]+/g, "ghp_REDACTED")
+    .replace(/gsk_[A-Za-z0-9_]+/g, "gsk_REDACTED")
+    .replace(/\b[0-9]{8,10}:[A-Za-z0-9_-]{20,}\b/g, "TELEGRAM_TOKEN_REDACTED");
+
 export class AgentDatabase {
   private readonly db: DatabaseSync;
 
@@ -87,7 +94,12 @@ export class AgentDatabase {
     return id;
   }
 
-  saveMessage(sessionId: string, channelId: string, role: "user" | "assistant", content: string): void {
+  saveMessage(
+    sessionId: string,
+    channelId: string,
+    role: "user" | "assistant",
+    content: string,
+  ): void {
     this.db
       .prepare(
         "INSERT INTO messages (id, session_id, channel_id, role, content, timestamp) VALUES (?, ?, ?, ?, ?, ?)",
@@ -122,8 +134,8 @@ export class AgentDatabase {
         traceId,
         channelId ?? null,
         toolName,
-        JSON.stringify(args),
-        resultSnippet ? resultSnippet.slice(0, 500) : null,
+        redactSecrets(JSON.stringify(args)),
+        resultSnippet ? redactSecrets(resultSnippet).slice(0, 500) : null,
         durationMs,
         isError ? 1 : 0,
         Date.now(),

@@ -37,6 +37,44 @@ const mockProvider = (turns: AgentLoopEvent[][]) => {
 };
 
 describe("runAgentLoop", () => {
+  it("stops before starting work when its wall-clock budget is exhausted", async () => {
+    const provider = mockProvider([[{ type: "text_delta", text: "should not run" }]]);
+
+    const result = await runAgentLoop([{ role: "user", content: [{ type: "text", text: "hi" }] }], {
+      provider,
+      executor: vi.fn(),
+      streamOpts: { model: "test-model" },
+      logger: noopLogger,
+      maxDurationMs: 0,
+    });
+
+    // Zero means the optional budget is disabled, preserving legacy behavior.
+    expect(result.text).toBe("should not run");
+  });
+
+  it("caps the provider timeout to the remaining wall-clock budget", async () => {
+    let observedTimeout = 0;
+    const provider = {
+      stream: async function* (_msgs: AgentLoopMessage[], opts: AgentLoopStreamOptions) {
+        observedTimeout = opts.timeoutMs ?? 0;
+        yield { type: "text_delta" as const, text: "bounded" };
+        yield { type: "stop" as const };
+      },
+    };
+
+    const result = await runAgentLoop([{ role: "user", content: [{ type: "text", text: "hi" }] }], {
+      provider,
+      executor: vi.fn(),
+      streamOpts: { model: "test-model", timeoutMs: 120_000 },
+      logger: noopLogger,
+      maxDurationMs: 250,
+    });
+
+    expect(result.text).toBe("bounded");
+    expect(observedTimeout).toBeGreaterThan(0);
+    expect(observedTimeout).toBeLessThanOrEqual(250);
+  });
+
   it("returns text when no tool calls are made", async () => {
     const provider = mockProvider([
       [
@@ -325,5 +363,37 @@ describe("runAgentLoop", () => {
     });
 
     expect(result.text).toContain("error");
+  });
+
+  it("caps compression retries per iteration instead of retrying context_length_exceeded forever", async () => {
+    // Provider always reports context_length_exceeded, no matter how many times we retry.
+    const provider = {
+      stream: vi.fn(async function* (): AsyncIterable<AgentLoopEvent> {
+        yield { type: "error", error: "context_length_exceeded: still too big" };
+      }),
+    };
+
+    // Pathological compressor: always claims to have compressed, but never actually shrinks anything.
+    const compressor = {
+      needsCompression: () => false,
+      compress: vi.fn(async () => ({ messages: [], wasCompressed: true })),
+    };
+
+    const result = await runAgentLoop([{ role: "user", content: [{ type: "text", text: "hi" }] }], {
+      provider,
+      executor: vi.fn(),
+      streamOpts: { model: "test-model" },
+      logger: noopLogger,
+      compressor,
+      maxIterations: 5,
+    });
+
+    // Initial attempt + MAX_COMPRESSION_RETRIES_PER_ITERATION retries, then give up on this turn.
+    expect(provider.stream).toHaveBeenCalledTimes(3);
+    expect(compressor.compress).toHaveBeenCalledTimes(2);
+    expect(result.text).toContain("error");
+    // The outer loop must not have spun through all 5 allotted iterations either —
+    // it should bail out of the whole run on the first turn once the cap is hit.
+    expect(result.iterations).toBe(1);
   });
 });

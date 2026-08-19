@@ -1,6 +1,12 @@
-import { type AgentLoopProvider, runAgentLoop } from "@hairyclaw/core";
+import {
+  type AgentLoopProvider,
+  CHILD_MAX_ITERATIONS,
+  type ToolExecutor,
+  runAgentLoop,
+} from "@hairyclaw/core";
 import type { HairyClawLogger } from "@hairyclaw/observability";
 import { z } from "zod";
+import { toolParametersToJsonSchema } from "../schema.js";
 import type { Tool, ToolContext } from "../types.js";
 
 type ThinkingLevel = "off" | "low" | "medium" | "high";
@@ -185,8 +191,13 @@ const noopLogger: HairyClawLogger = {
 export interface ChainToolOptions {
   /** Factory: given a model string and thinking level, return a provider */
   providerFactory: (model: string, thinking: ThinkingLevel) => AgentLoopProvider;
-  /** Default model used for all roles unless overridden in the chain def */
-  defaultModel: string;
+  /**
+   * Default model used for all roles unless overridden in the chain def.
+   * Accepts a getter so callers can resolve the current durable primary
+   * model fresh at each chain invocation (e.g. after /model use) instead of
+   * capturing a value once at tool-registration/startup time.
+   */
+  defaultModel: string | (() => string);
   /** Tools available to each role in the chain */
   tools: Tool[];
   logger?: HairyClawLogger;
@@ -194,14 +205,30 @@ export interface ChainToolOptions {
   modelOverrides?: Record<string, string>;
   /** Timeout per role in ms (default 5 min) */
   roleTimeoutMs?: number;
+  /**
+   * Optional executor to route tool calls through instead of calling
+   * `tool.execute()` directly. Callers that want named tool-profile
+   * enforcement (e.g. denying bash/ssh_exec/browser to chain roles) should
+   * supply a ToolRegistry-backed executor here with a restricted
+   * ctx.allowedTools — enforcement then happens at ToolRegistry.execute.
+   */
+  executor?: ToolExecutor;
+  /** Override runAgentLoop; used for testing. Defaults to the real runAgentLoop. */
+  runLoop?: typeof runAgentLoop;
 }
 
 const withTimeout = <T>(promise: Promise<T>, ms: number): Promise<T> =>
   new Promise<T>((resolve, reject) => {
     const t = setTimeout(() => reject(new Error(`role timed out after ${ms}ms`)), ms);
     promise.then(
-      (v) => { clearTimeout(t); resolve(v); },
-      (e: unknown) => { clearTimeout(t); reject(e); },
+      (v) => {
+        clearTimeout(t);
+        resolve(v);
+      },
+      (e: unknown) => {
+        clearTimeout(t);
+        reject(e);
+      },
     );
   });
 
@@ -220,19 +247,22 @@ export const createChainTool = (opts: ChainToolOptions): Tool => ({
     const chainDef = CHAINS[chainName];
     const logger = opts.logger ?? ctx.logger ?? noopLogger;
     const roleTimeoutMs = opts.roleTimeoutMs ?? 300_000;
+    const runLoop = opts.runLoop ?? runAgentLoop;
 
     const toToolDef = (tool: Tool) => ({
       name: tool.name,
       description: tool.description,
-      parameters: {} as Record<string, unknown>,
+      parameters: toolParametersToJsonSchema(tool.parameters, tool.name),
     });
 
-    const toolExecutor = async (name: string, toolArgs: unknown) => {
-      const tool = opts.tools.find((t) => t.name === name);
-      if (!tool) return { content: `tool not found: ${name}`, isError: true };
-      const result = await tool.execute(toolArgs, ctx);
-      return { content: result.content, isError: result.isError ?? false };
-    };
+    const toolExecutor: ToolExecutor =
+      opts.executor ??
+      (async (name: string, toolArgs: unknown) => {
+        const tool = opts.tools.find((t) => t.name === name);
+        if (!tool) return { content: `tool not found: ${name}`, isError: true };
+        const result = await tool.execute(toolArgs, ctx);
+        return { content: result.content, isError: result.isError ?? false };
+      });
 
     const outputs: Array<{ role: string; output: string }> = [];
 
@@ -242,44 +272,48 @@ export const createChainTool = (opts: ChainToolOptions): Tool => ({
         opts.modelOverrides?.[overrideKey] ??
         opts.modelOverrides?.[roleSpec.role] ??
         roleSpec.model ??
-        opts.defaultModel;
+        (typeof opts.defaultModel === "function" ? opts.defaultModel() : opts.defaultModel);
 
       const provider = opts.providerFactory(model, roleSpec.thinking);
 
       // Build context from prior role outputs
       const priorContext =
         outputs.length > 0
-          ? "\n\n---\nPrior outputs from earlier roles in this chain:\n" +
-            outputs.map((o) => `### ${o.role}\n${o.output}`).join("\n\n")
+          ? `\n\n---\nPrior outputs from earlier roles in this chain:\n${outputs
+              .map((o) => `### ${o.role}\n${o.output}`)
+              .join("\n\n")}`
           : "";
 
       const userMessage = `Task: ${task}${priorContext}`;
 
-      logger.info({ chain: chainName, role: roleSpec.role, model, thinking: roleSpec.thinking }, "chain role starting");
+      logger.info(
+        { chain: chainName, role: roleSpec.role, model, thinking: roleSpec.thinking },
+        "chain role starting",
+      );
 
       try {
         const result = await withTimeout(
-          runAgentLoop(
-            [{ role: "user", content: [{ type: "text", text: userMessage }] }],
-            {
-              provider,
-              executor: toolExecutor,
-              logger,
-              maxIterations: roleSpec.maxIterations ?? 20,
-              streamOpts: {
-                model,
-                systemPrompt: roleSpec.systemPrompt,
-                tools: opts.tools.map(toToolDef),
-                thinkingLevel: roleSpec.thinking,
-              },
+          runLoop([{ role: "user", content: [{ type: "text", text: userMessage }] }], {
+            provider,
+            executor: toolExecutor,
+            logger,
+            maxIterations: roleSpec.maxIterations ?? CHILD_MAX_ITERATIONS,
+            streamOpts: {
+              model,
+              systemPrompt: roleSpec.systemPrompt,
+              tools: opts.tools.map(toToolDef),
+              thinkingLevel: roleSpec.thinking,
             },
-          ),
+          }),
           roleTimeoutMs,
         );
 
         const output = result.text ?? "(no output)";
         outputs.push({ role: roleSpec.role, output });
-        logger.info({ chain: chainName, role: roleSpec.role, outputLength: output.length }, "chain role complete");
+        logger.info(
+          { chain: chainName, role: roleSpec.role, outputLength: output.length },
+          "chain role complete",
+        );
       } catch (err) {
         const msg = err instanceof Error ? err.message : "role failed";
         logger.error({ chain: chainName, role: roleSpec.role, err: msg }, "chain role error");
@@ -289,8 +323,9 @@ export const createChainTool = (opts: ChainToolOptions): Tool => ({
 
     // Return the final role's output as the chain result, with a header
     const final = outputs.at(-1)?.output ?? "(chain produced no output)";
-    const summary =
-      `[Chain: ${chainName} | Roles: ${outputs.map((o) => o.role).join(" → ")}]\n\n` + final;
+    const summary = `[Chain: ${chainName} | Roles: ${outputs
+      .map((o) => o.role)
+      .join(" → ")}]\n\n${final}`;
 
     return { content: summary };
   },

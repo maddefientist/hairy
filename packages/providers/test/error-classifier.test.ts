@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { classifyError, jitteredBackoff } from "../src/error-classifier.js";
+import {
+  ADVANCING_FAILOVER_REASONS,
+  classifyError,
+  jitteredBackoff,
+} from "../src/error-classifier.js";
 
 const makeError = (message: string, extra: Record<string, unknown> = {}): Error => {
   const err = new Error(message);
@@ -141,5 +145,69 @@ describe("jitteredBackoff", () => {
   it("returns integer values", () => {
     const result = jitteredBackoff(1000, 3, 60_000);
     expect(Number.isInteger(result)).toBe(true);
+  });
+});
+
+describe("schema and configuration failure classification", () => {
+  it("classifies 400 (non-context-length) as schema_error and non-retryable", () => {
+    const err = makeError("invalid request body: unexpected field", { status: 400 });
+    const result = classifyError(err);
+    expect(result.reason).toBe("schema_error");
+    expect(result.retryable).toBe(false);
+  });
+
+  it("classifies 422 as schema_error", () => {
+    const err = makeError("unprocessable entity", { status: 422 });
+    const result = classifyError(err);
+    expect(result.reason).toBe("schema_error");
+    expect(result.retryable).toBe(false);
+  });
+
+  it("classifies malformed-schema messages as schema_error without a status code", () => {
+    const err = makeError("schema validation failed: 'model' is required");
+    const result = classifyError(err);
+    expect(result.reason).toBe("schema_error");
+    expect(result.retryable).toBe(false);
+  });
+
+  it("classifies 404 as configuration_error", () => {
+    const err = makeError("not found", { status: 404 });
+    const result = classifyError(err);
+    expect(result.reason).toBe("configuration_error");
+    expect(result.retryable).toBe(false);
+  });
+
+  it("classifies missing-provider messages as configuration_error", () => {
+    const err = makeError("provider not configured for this deployment");
+    const result = classifyError(err);
+    expect(result.reason).toBe("configuration_error");
+    expect(result.retryable).toBe(false);
+  });
+
+  it("classifies missing-credential messages as configuration_error", () => {
+    const err = makeError("missing api key for provider grok");
+    const result = classifyError(err);
+    expect(result.reason).toBe("configuration_error");
+    expect(result.retryable).toBe(false);
+  });
+});
+
+describe("ADVANCING_FAILOVER_REASONS", () => {
+  it("only contains transient reasons", () => {
+    expect([...ADVANCING_FAILOVER_REASONS].sort()).toEqual(
+      ["network_error", "rate_limit", "server_error", "timeout"].sort(),
+    );
+  });
+
+  it("excludes auth, schema, configuration, context-length, and unknown", () => {
+    for (const reason of [
+      "auth_failure",
+      "schema_error",
+      "configuration_error",
+      "context_length_exceeded",
+      "unknown",
+    ] as const) {
+      expect(ADVANCING_FAILOVER_REASONS.has(reason)).toBe(false);
+    }
   });
 });

@@ -1,12 +1,14 @@
 import {
   type AgentLoopProvider,
   type AgentLoopResult,
+  CHILD_MAX_ITERATIONS,
   type SubagentExecutor,
   type ToolExecutor,
   runAgentLoop,
 } from "@hairyclaw/core";
 import type { HairyClawLogger } from "@hairyclaw/observability";
 import { z } from "zod";
+import { toolParametersToJsonSchema } from "../schema.js";
 import type { Tool, ToolContext } from "../types.js";
 
 const subAgentArgsSchema = z.object({
@@ -54,7 +56,7 @@ const toToolDef = (
 ): { name: string; description: string; parameters: Record<string, unknown> } => ({
   name: tool.name,
   description: tool.description,
-  parameters: {},
+  parameters: toolParametersToJsonSchema(tool.parameters, tool.name),
 });
 
 const withTimeout = async <T>(promise: Promise<T>, timeoutMs: number): Promise<T> =>
@@ -157,7 +159,7 @@ export const createSubAgentTool = (opts: ParallelSubAgentToolOptions): Tool => (
       provider,
       executor: toolExecutor,
       logger,
-      maxIterations: opts.maxIterations,
+      maxIterations: opts.maxIterations ?? CHILD_MAX_ITERATIONS,
       streamOpts: {
         model: opts.model ?? "default",
         systemPrompt: opts.systemPrompt,

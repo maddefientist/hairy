@@ -5,7 +5,7 @@ import type { Tool } from "../types.js";
 
 const pdfInputSchema = z.object({
   source: z.string().describe("URL to a PDF file, or a local file path."),
-  maxLength: z.number().int().positive().max(100_000).optional(),
+  maxLength: z.coerce.number().int().positive().max(100_000).optional(),
 });
 
 /**

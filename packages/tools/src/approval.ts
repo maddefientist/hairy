@@ -125,8 +125,30 @@ export const strictApprovalHandler: ApprovalHandler = async (req) => {
 /** Handler that always allows (no approval) */
 export const permissiveApprovalHandler: ApprovalHandler = async () => "allow";
 
-/** Handler that requires confirmation for everything not auto-allowed */
-export const interactiveApprovalHandler: ApprovalHandler = async (req) => {
-  console.warn(`[APPROVAL NEEDED] ${req.toolName}: ${req.reason} (risk: ${req.risk})`);
-  return "allow";
+/**
+ * Fail-closed handler: HairyClaw does not yet have a real asynchronous
+ * /approve token exchange (an operator confirming a specific pending call
+ * out-of-band before it executes). Rather than ship a handler that logs a
+ * warning and then allows the call anyway — which is a fake approval gate —
+ * every tool call that reaches this handler (i.e. every call ApprovalGate
+ * decided needs explicit approval or is high/medium risk) is denied. This is
+ * a known, intentional limitation of this release: high-impact tools that
+ * match the approval policy are unavailable until a real approval channel
+ * ships. See ApprovalGate / DEFAULT_APPROVAL_POLICY for what triggers this.
+ */
+export const failClosedApprovalHandler: ApprovalHandler = async (req) => {
+  console.warn(
+    `[APPROVAL REQUIRED — DENIED, NO APPROVAL CHANNEL] ${req.toolName}: ${req.reason} (risk: ${req.risk})`,
+  );
+  return "deny";
 };
+
+/**
+ * @deprecated Use {@link failClosedApprovalHandler}. This name previously
+ * implied a human could interactively approve requests, but it always
+ * auto-allowed — a fake gate. Kept only so external callers importing the
+ * old name fail loudly at the type level instead of silently getting the
+ * old (unsafe) behavior back; it is defined as an alias of the fail-closed
+ * handler.
+ */
+export const interactiveApprovalHandler: ApprovalHandler = failClosedApprovalHandler;

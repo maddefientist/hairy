@@ -80,3 +80,4 @@ export * from "./worker-status.js";
 export * from "./plugin-manifest.js";
 export * from "./plugin-registry.js";
 export * from "./iteration-budget.js";
+export * from "./iteration-limits.js";

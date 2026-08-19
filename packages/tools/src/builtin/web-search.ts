@@ -3,7 +3,7 @@ import type { Tool } from "../types.js";
 
 const searchInputSchema = z.object({
   query: z.string().min(1),
-  topK: z.number().int().positive().max(20).optional(),
+  topK: z.coerce.number().int().positive().max(20).optional(),
   categories: z
     .enum(["general", "images", "news", "science", "it", "files", "music", "social media"])
     .optional(),

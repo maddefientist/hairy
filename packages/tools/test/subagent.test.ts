@@ -5,7 +5,7 @@ import type {
   AgentLoopResult,
   AgentLoopStreamOptions,
 } from "@hairyclaw/core";
-import { SubagentExecutor } from "@hairyclaw/core";
+import { CHILD_MAX_ITERATIONS, SubagentExecutor } from "@hairyclaw/core";
 import { describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import { createSubAgentTool } from "../src/builtin/subagent.js";
@@ -152,6 +152,59 @@ describe("createSubAgentTool", () => {
 
     expect(result.content).toBe("nested");
     expect(echoTool.execute).toHaveBeenCalledTimes(1);
+  });
+
+  it("passes real JSON-schema tool definitions (not empty objects) to the nested agent loop", async () => {
+    const echoTool = {
+      name: "echo",
+      description: "Echo value",
+      parameters: z.object({ value: z.string().min(1), tag: z.string().optional() }),
+      execute: vi.fn(async (args: unknown) => {
+        const parsed = z
+          .object({ value: z.string().min(1), tag: z.string().optional() })
+          .parse(args);
+        return { content: parsed.value };
+      }),
+    };
+
+    const runLoop = vi.fn(async (_messages: unknown, _options: AgentLoopOptions) => baseResult);
+
+    const tool = createSubAgentTool({
+      name: "sub",
+      description: "desc",
+      systemPrompt: "sys",
+      tools: [echoTool],
+      runLoop,
+    });
+
+    await tool.execute({ task: "run nested" }, toolCtx());
+
+    const call = runLoop.mock.calls[0] as [unknown, AgentLoopOptions];
+    const toolDefs = call[1].streamOpts.tools as Array<{
+      name: string;
+      parameters: { type: string; properties: Record<string, unknown>; required: string[] };
+    }>;
+    const echoDef = toolDefs.find((t) => t.name === "echo");
+    expect(echoDef).toBeDefined();
+    expect(echoDef?.parameters.type).toBe("object");
+    expect(echoDef?.parameters.properties.value).toMatchObject({ type: "string" });
+    expect(echoDef?.parameters.required).toEqual(["value"]);
+  });
+
+  it("defaults maxIterations to the shared CHILD_MAX_ITERATIONS bound when the caller does not set one", async () => {
+    const runLoop = vi.fn(async (_messages: unknown, _options: AgentLoopOptions) => baseResult);
+
+    const tool = createSubAgentTool({
+      name: "sub",
+      description: "desc",
+      systemPrompt: "sys",
+      runLoop,
+    });
+
+    await tool.execute({ task: "run nested" }, toolCtx());
+
+    const call = runLoop.mock.calls[0] as [unknown, AgentLoopOptions];
+    expect(call[1].maxIterations).toBe(CHILD_MAX_ITERATIONS);
   });
 
   it("returns error when provider and runLoop are both missing", async () => {

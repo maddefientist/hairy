@@ -9,9 +9,19 @@ const inputSchema = z.object({
   host: z.string().min(1).describe("Hostname or IP address of the target machine."),
   command: z.string().min(1).describe("Shell command to run on the remote host."),
   user: z.string().optional().describe("SSH user (defaults to current user)."),
-  port: z.number().int().min(1).max(65535).default(22).optional().describe("SSH port (default 22)."),
-  identityFile: z.string().optional().describe("Path to SSH private key file. Defaults to ~/.ssh/id_rsa or agent config."),
-  timeoutMs: z.number().int().positive().default(30_000).optional(),
+  port: z.coerce
+    .number()
+    .int()
+    .min(1)
+    .max(65535)
+    .default(22)
+    .optional()
+    .describe("SSH port (default 22)."),
+  identityFile: z
+    .string()
+    .optional()
+    .describe("Path to SSH private key file. Defaults to ~/.ssh/id_rsa or agent config."),
+  timeoutMs: z.coerce.number().int().positive().default(30_000).optional(),
 });
 
 export interface SshExecOptions {
@@ -43,10 +53,14 @@ export const createSshExecTool = (opts: SshExecOptions = {}): Tool => ({
     }
 
     const sshArgs: string[] = [
-      "-o", "StrictHostKeyChecking=accept-new",
-      "-o", "BatchMode=yes",
-      "-o", "ConnectTimeout=10",
-      "-p", String(input.port ?? 22),
+      "-o",
+      "StrictHostKeyChecking=accept-new",
+      "-o",
+      "BatchMode=yes",
+      "-o",
+      "ConnectTimeout=10",
+      "-p",
+      String(input.port ?? 22),
     ];
 
     if (input.identityFile) {

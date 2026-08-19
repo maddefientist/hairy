@@ -20,6 +20,7 @@
     "@hairyclaw/core": "workspace:*",
     "@hairyclaw/memory": "workspace:*",
     "@hairyclaw/observability": "workspace:*",
-    "zod": "^3.24.2"
+    "zod": "^3.24.2",
+    "zod-to-json-schema": "^3"
   }
 }

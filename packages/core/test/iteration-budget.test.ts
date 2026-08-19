@@ -67,9 +67,9 @@ describe("IterationBudget", () => {
   });
 
   describe("createSubagentBudget", () => {
-    it("creates budget with default 25 iterations", () => {
+    it("creates budget with default CHILD_MAX_ITERATIONS (15) iterations", () => {
       const budget = createSubagentBudget();
-      expect(budget.maxTotal).toBe(25);
+      expect(budget.maxTotal).toBe(15);
       expect(budget.used).toBe(0);
     });
 

@@ -1,5 +1,10 @@
 import type { HairyClawLogger } from "@hairyclaw/observability";
-import { type ClassifiedError, classifyError, jitteredBackoff } from "./error-classifier.js";
+import {
+  ADVANCING_FAILOVER_REASONS,
+  type ClassifiedError,
+  classifyError,
+  jitteredBackoff,
+} from "./error-classifier.js";
 import type { ModelInfo, Provider, ProviderMessage, StreamEvent, StreamOptions } from "./types.js";
 
 export interface FailoverConfig {
@@ -31,8 +36,11 @@ export const createFailoverProvider = (deps: FailoverProviderDeps): Provider => 
 
     async *stream(messages: ProviderMessage[], opts: StreamOptions): AsyncIterable<StreamEvent> {
       const errors: ClassifiedError[] = [];
+      let stopChain = false;
 
       for (const entry of deps.config.chain) {
+        if (stopChain) break;
+
         const provider = deps.providers.get(entry.provider);
         if (!provider) {
           deps.logger.warn({ provider: entry.provider }, "failover: provider not found, skipping");
@@ -72,19 +80,27 @@ export const createFailoverProvider = (deps: FailoverProviderDeps): Provider => 
               "failover: provider error",
             );
 
-            // Auth failure → don't retry this provider
-            if (classified.reason === "auth_failure") break;
             // Context length → don't retry at all (won't help with different provider)
             if (classified.reason === "context_length_exceeded") {
               yield { type: "error", error: "context_length_exceeded" };
               return;
             }
 
+            // Fail closed: auth, schema, configuration, and unclassified failures are not
+            // transient. Stop retrying this provider AND stop advancing the chain — trying
+            // another provider/model won't fix a bad credential or malformed request, and
+            // silently cycling through the rest of the chain would mask the real problem.
+            if (!ADVANCING_FAILOVER_REASONS.has(classified.reason)) {
+              stopChain = true;
+              break;
+            }
+
             // Retryable: use provider's suggested delay when present, else exponential backoff
             if (classified.retryable) {
-              const delayMs = classified.suggestedDelayMs > 0
-                ? classified.suggestedDelayMs
-                : jitteredBackoff(backoffBaseMs, attempt, backoffMaxMs);
+              const delayMs =
+                classified.suggestedDelayMs > 0
+                  ? classified.suggestedDelayMs
+                  : jitteredBackoff(backoffBaseMs, attempt, backoffMaxMs);
               await new Promise((resolve) => setTimeout(resolve, delayMs));
             }
           } catch (err: unknown) {
@@ -96,10 +112,14 @@ export const createFailoverProvider = (deps: FailoverProviderDeps): Provider => 
               "failover: provider threw",
             );
 
-            if (!classified.retryable) break;
-            const delayMs = classified.suggestedDelayMs > 0
-              ? classified.suggestedDelayMs
-              : jitteredBackoff(backoffBaseMs, attempt, backoffMaxMs);
+            if (!ADVANCING_FAILOVER_REASONS.has(classified.reason)) {
+              stopChain = true;
+              break;
+            }
+            const delayMs =
+              classified.suggestedDelayMs > 0
+                ? classified.suggestedDelayMs
+                : jitteredBackoff(backoffBaseMs, attempt, backoffMaxMs);
             await new Promise((resolve) => setTimeout(resolve, delayMs));
           }
         }
