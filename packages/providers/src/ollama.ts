@@ -117,7 +117,8 @@ const toOllamaMessages = (
       const images: string[] = message.content
         .filter((part) => part.type === "image" && part.image !== undefined)
         .map((part) => {
-          const img = part.image!;
+          const img = part.image;
+          if (!img) return null;
           // Ollama needs base64 strings; skip URL images (not natively supported)
           return "data" in img ? img.data.toString("base64") : null;
         })
