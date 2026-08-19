@@ -7,8 +7,8 @@ const execAsync = promisify(exec);
 
 const bashInputSchema = z.object({
   command: z.string().min(1),
-  timeout: z.number().int().positive().max(120_000).optional(),
-  maxOutputBytes: z.number().int().positive().max(5_000_000).optional(),
+  timeout: z.coerce.number().int().positive().max(120_000).optional(),
+  maxOutputBytes: z.coerce.number().int().positive().max(5_000_000).optional(),
 });
 
 interface BashToolOptions {
@@ -33,7 +33,7 @@ export const createBashTool = (opts: BashToolOptions = {}): Tool => ({
   name: "bash",
   description: "Execute a shell command with timeout and output truncation.",
   parameters: bashInputSchema,
-  async execute(args) {
+  async execute(args, ctx) {
     const input = bashInputSchema.parse(args);
     const command = input.command;
 
@@ -69,6 +69,7 @@ export const createBashTool = (opts: BashToolOptions = {}): Tool => ({
 
     try {
       const result = await execAsync(command, {
+        cwd: ctx.cwd,
         timeout: input.timeout ?? 30_000,
         maxBuffer: input.maxOutputBytes ?? 1_048_576,
       });
@@ -78,9 +79,14 @@ export const createBashTool = (opts: BashToolOptions = {}): Tool => ({
         content: content.trim(),
       };
     } catch (error: unknown) {
-      const message = error instanceof Error ? error.message : "bash execution failed";
+      const err = error as Error & { stdout?: string | Buffer; stderr?: string | Buffer };
+      const parts = [
+        err.stdout ? String(err.stdout) : "",
+        err.stderr ? String(err.stderr) : "",
+        err.message ? String(err.message) : "bash execution failed",
+      ].filter((part) => part.trim().length > 0);
       return {
-        content: message,
+        content: parts.join("\n").trim(),
         isError: true,
       };
     }

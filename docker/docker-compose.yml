@@ -6,7 +6,7 @@ services:
       dockerfile: docker/Dockerfile
     environment:
       HAIRY_HEALTH_PORT: 9090
-      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      SUPERGROK_AUTH_FILE: ${SUPERGROK_AUTH_FILE:-./data/providers/supergrok-auth.json}
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
       WEBHOOK_SECRET: ${WEBHOOK_SECRET:-}
     ports:

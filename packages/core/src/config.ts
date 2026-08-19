@@ -2,12 +2,14 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import * as TOML from "@iarna/toml";
 import { z } from "zod";
+import { CHILD_MAX_ITERATIONS, PRIMARY_MAX_ITERATIONS } from "./iteration-limits.js";
 
 const providerSchema = z.object({
   enabled: z.boolean().default(false),
   default_model: z.string().min(1),
   api_key: z.string().optional(),
   base_url: z.string().url().optional(),
+  auth_file: z.string().min(1).optional(),
   context_window: z.number().int().positive().optional(),
   model_fallback_chain: z.array(z.string().min(1)).optional(),
 });
@@ -97,42 +99,66 @@ const memorySchema = z.object({
   preload_max_chars: z.number().int().positive().default(2_000),
 });
 
+const thinkingLevelSchema = z.enum(["off", "low", "medium", "high"]);
+
 const orchestratorSchema = z.object({
   model: z.string().default(""),
+  fallback_models: z.array(z.string().min(1)).default([]),
   tools: z.array(z.string()).default(["delegate", "memory_recall", "memory_ingest"]),
   temperature: z.number().min(0).max(2).default(0.7),
   max_tokens: z.number().int().positive().default(4096),
+  /**
+   * Optional explicit thinking level for the brain role. Left unset by
+   * default (no schema default) so an unconfigured deployment keeps
+   * whatever a provider's own default thinking behavior is; a deployment
+   * that wants a fast, non-thinking conversational brain sets this to
+   * "off" explicitly (see config/default.toml). Threaded through to
+   * AgentLoopStreamOptions.thinkingLevel — the Ollama provider sends
+   * think=false rather than omitting the field when this is "off", since
+   * Ollama otherwise defaults to thinking-enabled for supported models.
+   */
+  thinking_level: thinkingLevelSchema.optional(),
 });
 
 const executorSchema = z.object({
   model: z.string().default(""),
-  tools: z.array(z.string()).default(["bash", "read", "write", "edit", "web_search", "web_fetch"]),
+  fallback_models: z.array(z.string().min(1)).default([]),
+  tools: z.array(z.string()).default(["bash", "read", "write", "edit", "web-search", "web-fetch"]),
   temperature: z.number().min(0).max(2).default(0.1),
   max_tokens: z.number().int().positive().default(4096),
-  max_iterations: z.number().int().positive().default(20),
+  max_iterations: z.number().int().positive().default(CHILD_MAX_ITERATIONS),
   system_prompt: z.string().default(""),
+  /**
+   * Optional explicit thinking level for the hands role. Left unset by
+   * default, deliberately — hands is the careful/deliberate executor and
+   * its existing (provider-default) thinking behavior is not changed by
+   * this feature. Set explicitly only if a deployment wants to override it.
+   */
+  thinking_level: thinkingLevelSchema.optional(),
 });
 
 const configSchema = z.object({
   agent: z.object({
     name: z.string().default("HairyClaw"),
     data_dir: z.string().default("./data"),
-    max_iterations_per_run: z.number().int().positive().default(25),
+    max_iterations_per_run: z.number().int().positive().default(PRIMARY_MAX_ITERATIONS),
     max_context_tokens: z.number().int().positive().default(100000),
     mode: z.enum(["unified", "orchestrator"]).default("unified"),
   }),
   orchestrator: orchestratorSchema.default({
     model: "",
+    fallback_models: [],
     tools: ["delegate", "memory_recall", "memory_ingest"],
     temperature: 0.7,
     max_tokens: 4096,
   }),
   executor: executorSchema.default({
     model: "",
-    tools: ["bash", "read", "write", "edit", "web_search", "web_fetch"],
+    fallback_models: [],
+    tools: ["bash", "read", "write", "edit", "web-search", "web-fetch"],
     temperature: 0.1,
     max_tokens: 4096,
-    max_iterations: 5,
+    max_iterations: CHILD_MAX_ITERATIONS,
     system_prompt: "",
   }),
   health: z.object({
@@ -146,7 +172,7 @@ const configSchema = z.object({
   }),
   providers: z
     .object({
-      anthropic: providerSchema.optional(),
+      supergrok: providerSchema.optional(),
       openrouter: providerSchema.optional(),
       ollama: providerSchema.optional(),
       gemini: providerSchema.optional(),
@@ -154,8 +180,8 @@ const configSchema = z.object({
     .default({}),
   routing: z
     .object({
-      default_provider: z.string().default("anthropic"),
-      fallback_chain: z.array(z.string()).default(["anthropic"]),
+      default_provider: z.string().default("ollama"),
+      fallback_chain: z.array(z.string()).default(["ollama"]),
       rules: z
         .record(
           z.object({
@@ -172,7 +198,7 @@ const configSchema = z.object({
         })
         .default({ track: true, daily_budget_usd: 10, alert_threshold_pct: 80 }),
     })
-    .default({ default_provider: "anthropic", fallback_chain: ["anthropic"] }),
+    .default({ default_provider: "ollama", fallback_chain: ["ollama"] }),
   growth: growthSchema.default({
     reflection_enabled: true,
     initiative_enabled: false,
@@ -200,6 +226,24 @@ const configSchema = z.object({
     sidecar: { auto_build: true, health_check_interval_ms: 30000 },
   }),
   features: featuresSchema.default({}),
+  operators: z
+    .object({
+      /**
+       * Channel-scoped operator identifiers allowed to run mutating commands
+       * (/model use|fallback|test|rollback, /update, /clear, /approve).
+       * Format: "<channelType>:<senderId>", e.g. "telegram:operator-id" or
+       * "cli:local-user" — never a bare sender id, so an identity on one
+       * channel (including an untrusted, caller-supplied webhook identity)
+       * can never be mistaken for an identity on another. Empty by
+       * default — mutating commands are denied for everyone until an
+       * operator is explicitly configured. The "webhook" channel type is
+       * never treated as an operator identity, regardless of allowlist
+       * contents, since webhook sender ids are supplied by the caller's
+       * request body and are not authenticated by the transport.
+       */
+      allowlist: z.array(z.string()).default([]),
+    })
+    .default({ allowlist: [] }),
 });
 
 export type HairyClawConfig = z.infer<typeof configSchema>;

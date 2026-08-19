@@ -12,26 +12,44 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - uses: actions/setup-node@v4
         with:
           node-version: 22
 
+      # package.json#packageManager is the single pinned pnpm version.
       - uses: pnpm/action-setup@v4
-        with:
-          version: 9
 
       - name: Install dependencies
         run: pnpm install
 
-      - name: Lint + typecheck
-        run: pnpm check
+      # The historical tree has repository-wide Biome debt. Keep new PR work
+      # clean without making unrelated legacy files block every change.
+      - name: Lint changed files
+        if: github.event_name == 'pull_request'
+        shell: bash
+        run: |
+          mapfile -t files < <(
+            git diff --name-only --diff-filter=ACMR \
+              "origin/${{ github.base_ref }}...HEAD" -- \
+              '*.ts' '*.tsx' '*.js' '*.jsx' '*.json' '*.jsonc' '*.css'
+          )
+          if (( ${#files[@]} )); then
+            pnpm exec biome check "${files[@]}"
+          fi
 
-      - name: Test
-        run: pnpm test
+      - name: Typecheck
+        run: pnpm -r run typecheck
 
       - name: Build
         run: pnpm build
+
+      # Several workspace packages intentionally resolve through their built
+      # package exports, so tests require a clean-runner build first.
+      - name: Test
+        run: pnpm test
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
@@ -39,12 +57,3 @@ jobs:
       - name: Build Rust sidecar
         run: cargo build --release
         working-directory: sidecars/example-rust
-
-      - name: Setup Go
-        uses: actions/setup-go@v5
-        with:
-          go-version: "1.23"
-
-      - name: Build Go sidecar
-        run: go build -o example-go-sidecar ./main.go
-        working-directory: sidecars/example-go

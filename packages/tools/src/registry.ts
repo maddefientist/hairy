@@ -1,5 +1,6 @@
 import { setTimeout as delay } from "node:timers/promises";
 import type { HairyClawLogger as Logger } from "@hairyclaw/observability";
+import { ZodError } from "zod";
 import type { ApprovalGate } from "./approval.js";
 import type { Tool, ToolContext, ToolResult } from "./types.js";
 
@@ -42,6 +43,20 @@ export class ToolRegistry {
       };
     }
 
+    // Enforce the caller's tool profile here, at the point of execution, so a
+    // child/sub-agent can never invoke a hidden tool by name even if it is
+    // handed a broader tool list or definitions elsewhere.
+    if (ctx.allowedTools && !ctx.allowedTools.includes(name)) {
+      this.opts.logger.warn(
+        { traceId: ctx.traceId, toolName: name },
+        "tool call denied: not permitted for this execution profile",
+      );
+      return {
+        content: `tool "${name}" is not permitted for this execution profile`,
+        isError: true,
+      };
+    }
+
     const startedAt = Date.now();
 
     // Check approval gate before execution
@@ -62,8 +77,32 @@ export class ToolRegistry {
       }
     }
 
+    let parsedArgs: unknown;
     try {
-      const parsedArgs = tool.parameters.parse(args);
+      parsedArgs = tool.parameters.parse(args);
+    } catch (error: unknown) {
+      const isZod = error instanceof ZodError;
+      const message = error instanceof Error ? error.message : "unknown validation error";
+      this.opts.logger.warn(
+        {
+          err: error,
+          traceId: ctx.traceId,
+          toolName: name,
+          durationMs: Date.now() - startedAt,
+          isValidationError: isZod,
+        },
+        "tool argument validation failed",
+      );
+      return {
+        content: isZod
+          ? `Invalid arguments for tool ${name}: ${message}. Re-emit the call with arguments matching the declared parameter schema (numbers as JSON numbers, not strings, etc.).`
+          : message,
+        isError: true,
+        isValidationError: isZod,
+      };
+    }
+
+    try {
       const timeoutMs = tool.timeout_ms ?? this.defaultTimeoutMs;
       const result = await this.withTimeout(tool.execute(parsedArgs, ctx), timeoutMs);
 

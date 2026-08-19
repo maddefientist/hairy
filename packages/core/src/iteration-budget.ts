@@ -1,3 +1,5 @@
+import { CHILD_MAX_ITERATIONS } from "./iteration-limits.js";
+
 /**
  * Iteration budget for an agent loop.
  * Each agent (parent or subagent) gets its own IterationBudget.
@@ -42,6 +44,6 @@ export class IterationBudget {
   }
 }
 
-/** Factory: create a subagent budget (default 25, less than parent's 90) */
-export const createSubagentBudget = (maxIterations = 25): IterationBudget =>
+/** Factory: create a subagent budget (default: CHILD_MAX_ITERATIONS, from the single iteration-limits source) */
+export const createSubagentBudget = (maxIterations = CHILD_MAX_ITERATIONS): IterationBudget =>
   new IterationBudget(maxIterations);

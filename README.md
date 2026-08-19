@@ -255,6 +255,10 @@ Routing rules live in `config/providers.toml`. If the primary provider fails, th
 - **Error classifier** — distinguishes retryable (429/5xx/network) from terminal errors (auth, quota exhausted) so the failover loop doesn't burn budget on doomed retries
 - **Auth profiles** — multiple API keys per provider with per-profile usage stats; the gateway rotates across healthy profiles, useful for OAuth-based providers (e.g. Gemini CLI auth) whose tokens expire frequently
 
+#### Role-aware model selection (brain_hands / orchestrator mode)
+
+In `orchestrator` (brain_hands) mode, Hairy runs two independently selectable model roles — **brain** (fast conversational controller/planner) and **hands** (technical executor for coding, system design, debugging, and explicit delegation) — each with its own durable primary, fallback chain, circuit-breaker state, and gateway. See [docs/model-roles.md](docs/model-roles.md) for configuration, commands, migration, and rollback.
+
 ### Tools
 
 Tools are functions Hairy can call. Built-ins:

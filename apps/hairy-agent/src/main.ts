@@ -1,7 +1,9 @@
 import { execSync } from "node:child_process";
 import { createHash } from "node:crypto";
+import { realpathSync } from "node:fs";
 import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
-import { basename, join } from "node:path";
+import { basename, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import {
   type ChannelAdapter,
   DeliveryQueue,
@@ -16,10 +18,19 @@ import {
   type AgentLoopMessage,
   type AgentLoopStreamOptions,
   type AgentLoopToolDef,
+  CHILD_MAX_ITERATIONS,
+  type CircuitStateSummary,
   CommandRouter,
   type HairyClawPlugin,
+  MAX_PROVIDER_RETRIES_PER_ATTEMPT,
+  type ModelCatalogEntrySummary,
+  type ModelCommandResult,
+  type ModelRole,
+  type ModelStatusSnapshot,
   Orchestrator,
+  PRIMARY_MAX_ITERATIONS,
   PluginRunner,
+  type RoleModelStatusSnapshot,
   type ScheduledTask,
   Scheduler,
   TaskQueue,
@@ -42,23 +53,38 @@ import {
   createMemoryBackend,
   createMemoryPreloadPlugin,
 } from "@hairyclaw/memory";
-import { type HairyClawLogger, Metrics, createLogger } from "@hairyclaw/observability";
+import {
+  DiagnosticsRecorder,
+  type HairyClawLogger,
+  Metrics,
+  createLogger,
+} from "@hairyclaw/observability";
 import {
   AuthProfileManager,
+  DEFAULT_MODEL_CATALOG,
+  ModelCatalog,
+  ModelSelectionStore,
   type Provider,
   ProviderGateway,
-  createAnthropicProvider,
+  RoleModelSelectionStore,
   createGeminiProvider,
   createOllamaProvider,
   createOpenRouterProvider,
+  createSuperGrokProvider,
+  reconcileCatalogWithProviders,
+  resolveModelChain,
 } from "@hairyclaw/providers";
 import {
+  ApprovalGate,
+  DEFAULT_APPROVAL_POLICY,
   SidecarManager,
   type Tool,
   ToolRegistry,
+  buildChildProfile,
   checkReminders,
   createBashTool,
   createBrowserTool,
+  createChainTool,
   createEditTool,
   createIdentityEvolveTool,
   createMemoryIngestTool,
@@ -68,13 +94,16 @@ import {
   createReminderTool,
   createSshExecTool,
   createSubAgentTool,
-  createChainTool,
   createVideoDownloadTool,
   createVideoExtractTool,
   createWebFetchTool,
   createWebSearchTool,
   createWriteTool,
+  failClosedApprovalHandler,
+  primaryOperatorProfile,
+  resolveConfiguredToolNames,
   setReminderCallback,
+  toolParametersToJsonSchema,
 } from "@hairyclaw/tools";
 import { z } from "zod";
 import { loadHairyClawConfig } from "./config.js";
@@ -84,13 +113,20 @@ import { buildSystemPrompt } from "./identity.js";
 
 const logger = createLogger("hairyclaw");
 
-type ProviderName = "anthropic" | "openrouter" | "gemini" | "ollama";
+type ProviderName = "supergrok" | "openrouter" | "gemini" | "ollama";
 
-const buildProviders = (config: Awaited<ReturnType<typeof loadHairyClawConfig>>): Provider[] => {
+export const buildProviders = (
+  config: Awaited<ReturnType<typeof loadHairyClawConfig>>,
+): Provider[] => {
   const providers: Provider[] = [];
 
-  if (config.providers.anthropic.enabled && config.providers.anthropic.apiKey) {
-    providers.push(createAnthropicProvider({ apiKey: config.providers.anthropic.apiKey }));
+  if (config.providers.supergrok.enabled && config.providers.supergrok.authFile) {
+    providers.push(
+      createSuperGrokProvider({
+        authFile: config.providers.supergrok.authFile,
+        baseUrl: config.providers.supergrok.baseUrl,
+      }),
+    );
   }
 
   if (config.providers.openrouter.enabled && config.providers.openrouter.apiKey) {
@@ -113,18 +149,18 @@ const buildProviders = (config: Awaited<ReturnType<typeof loadHairyClawConfig>>)
   return providers;
 };
 
-const defaultModelForProvider = (
+export const defaultModelForProvider = (
   config: Awaited<ReturnType<typeof loadHairyClawConfig>>,
   provider: string,
 ): string => {
   const name = provider as ProviderName;
-  if (name === "anthropic") return config.providers.anthropic.defaultModel;
+  if (name === "supergrok") return config.providers.supergrok.defaultModel;
   if (name === "openrouter") return config.providers.openrouter.defaultModel;
   if (name === "gemini") return config.providers.gemini.defaultModel;
   return config.providers.ollama.defaultModel;
 };
 
-const resolveRouting = (
+export const resolveRouting = (
   config: Awaited<ReturnType<typeof loadHairyClawConfig>>,
   providerNames: string[],
 ): {
@@ -165,58 +201,84 @@ const resolveRouting = (
   return { defaultProvider, fallbackChain, modelFallbackChain };
 };
 
-/** Convert a Tool (Zod schema) → AgentLoopToolDef (JSON schema) for the LLM */
-const toolToDefinition = (tool: Tool): AgentLoopToolDef => {
-  let jsonSchema: Record<string, unknown> = {};
-
-  try {
-    if ("_def" in tool.parameters) {
-      const def = tool.parameters._def as {
-        typeName?: string;
-        shape?: () => Record<string, { _def?: { typeName?: string; description?: string } }>;
-      };
-      if (def.typeName === "ZodObject" && typeof def.shape === "function") {
-        const shape = def.shape();
-        const properties: Record<string, unknown> = {};
-        const required: string[] = [];
-
-        for (const [key, fieldSchema] of Object.entries(shape)) {
-          const fieldDef = fieldSchema?._def as {
-            typeName?: string;
-            description?: string;
-            innerType?: { _def?: { typeName?: string } };
-          };
-
-          let fieldType = "string";
-          let isOptional = false;
-
-          if (fieldDef?.typeName === "ZodOptional") {
-            isOptional = true;
-            const inner = fieldDef.innerType?._def?.typeName;
-            if (inner === "ZodNumber") fieldType = "number";
-            else if (inner === "ZodBoolean") fieldType = "boolean";
-          } else if (fieldDef?.typeName === "ZodNumber") {
-            fieldType = "number";
-          } else if (fieldDef?.typeName === "ZodBoolean") {
-            fieldType = "boolean";
-          }
-
-          properties[key] = {
-            type: fieldType,
-            ...(fieldDef?.description ? { description: fieldDef.description } : {}),
-          };
-          if (!isOptional) required.push(key);
-        }
-
-        jsonSchema = { properties, required };
-      }
+/**
+ * Build the operator authorization check used by mutating commands
+ * (/model use|fallback|test|rollback, /update, /clear, /approve).
+ *
+ * Fail-closed by construction:
+ *  - The "webhook" channel is never authorized, regardless of allowlist
+ *    contents — a webhook sender id is caller-supplied JSON, not an
+ *    identity the shared secret authenticates, so it can never stand in for
+ *    a real operator identity.
+ *  - All other channels are checked against a channel-scoped identifier
+ *    ("<channelType>:<senderId>"), never a bare sender id — this is what
+ *    prevents a sender id valid on one channel from being replayed/matched
+ *    on a different channel.
+ *  - An empty allowlist denies everyone.
+ */
+export const buildOperatorAuthorizer = (
+  operatorAllowlist: string[],
+): ((channelType: string, senderId: string) => boolean) => {
+  const allowlist = new Set(operatorAllowlist);
+  return (channelType: string, senderId: string): boolean => {
+    if (channelType === "webhook") {
+      return false;
     }
-  } catch {
-    jsonSchema = { properties: {} };
+    if (allowlist.size === 0) {
+      return false;
+    }
+    return allowlist.has(`${channelType}:${senderId}`);
+  };
+};
+
+/**
+ * Resolve the safe-default model id used when the durably-selected primary
+ * is unknown/unavailable. Never hard-pins a model id that may not exist for
+ * this deployment: prefers the currently configured Ollama model when Ollama
+ * is enabled and constructed, otherwise the first constructed provider's own
+ * configured default model. Throws an actionable error if no provisioned
+ * provider has an available catalog entry — there is no implicit fallback to
+ * an unavailable id.
+ */
+export const resolveSafeDefaultModelId = (opts: {
+  catalog: ModelCatalog;
+  ollamaEnabled: boolean;
+  ollamaDefaultModel: string;
+  /** Constructed providers in preference order (main.ts: the `providers` array). */
+  constructedProviderOrder: string[];
+  /** provider name -> that provider's currently configured default model */
+  providerDefaultModels: Map<string, string>;
+}): string => {
+  const constructed = new Set(opts.constructedProviderOrder);
+
+  if (opts.ollamaEnabled && constructed.has("ollama")) {
+    const id = `ollama/${opts.ollamaDefaultModel}`;
+    if (opts.catalog.isSelectable(id)) {
+      return id;
+    }
   }
 
-  return { name: tool.name, description: tool.description, parameters: jsonSchema };
+  for (const provider of opts.constructedProviderOrder) {
+    const model = opts.providerDefaultModels.get(provider);
+    if (!model) continue;
+    const id = `${provider}/${model}`;
+    if (opts.catalog.isSelectable(id)) {
+      return id;
+    }
+  }
+
+  throw new Error(
+    "No model is available: no constructed provider has a provisioned, catalog-available model. " +
+      "Enable and configure at least one provider (SuperGrok, Ollama, OpenRouter, or Gemini) with valid credentials.",
+  );
 };
+
+/** Convert a Tool (Zod schema) → AgentLoopToolDef (JSON schema) for the LLM. */
+const toolToDefinition = (tool: Tool): AgentLoopToolDef => ({
+  name: tool.name,
+  description: tool.description,
+  parameters: toolParametersToJsonSchema(tool.parameters, tool.name),
+});
 
 const initiativeRuleSchema = z.array(
   z.object({
@@ -249,20 +311,32 @@ const parseCsvEnv = (value: string | undefined): string[] => {
     .filter((item) => item.length > 0);
 };
 
-/** Parse "provider/model" string into parts. Falls back to defaultProvider if no slash. */
-const parseModelSpec = (
+/** Parse a non-empty model spec. Bare model names use defaultProvider. */
+export const parseModelSpec = (
   spec: string,
   defaultProvider: string,
 ): { provider: string; model: string } => {
-  const slashIdx = spec.indexOf("/");
-  if (slashIdx <= 0) {
-    return { provider: defaultProvider, model: spec || defaultProvider };
+  const normalized = spec.trim();
+  if (!normalized) {
+    throw new Error('model spec must be non-empty (expected "provider/model" or "model")');
   }
-  return { provider: spec.slice(0, slashIdx), model: spec.slice(slashIdx + 1) };
+  const slashIdx = normalized.indexOf("/");
+  if (slashIdx < 0) {
+    return { provider: defaultProvider, model: normalized };
+  }
+  const provider = normalized.slice(0, slashIdx).trim();
+  const model = normalized.slice(slashIdx + 1).trim();
+  if (!provider || !model) {
+    throw new Error(`invalid model spec "${spec}" (expected "provider/model")`);
+  }
+  return { provider, model };
 };
 
 /** Build a structured executor system prompt that small/local models can follow reliably. */
-const buildExecutorSystemPrompt = (toolDefs: AgentLoopToolDef[], context?: string): string => {
+export const buildExecutorSystemPrompt = (
+  toolDefs: AgentLoopToolDef[],
+  context?: string,
+): string => {
   const toolList = toolDefs.map((t) => `  - ${t.name}: ${t.description}`).join("\n");
 
   const sections = [
@@ -276,6 +350,8 @@ const buildExecutorSystemPrompt = (toolDefs: AgentLoopToolDef[], context?: strin
     "4. After completing the work, respond with a SHORT summary of what you did and the results.",
     "5. If a tool call fails, try ONE alternative approach. If that also fails, report the error.",
     "6. Do NOT explain your reasoning. Just do the work and report results.",
+    "7. For web research (fetching a URL or searching the web), use the web-search / web-fetch tools directly. Do NOT use bash with curl, wget, or other network commands for this — those are blocked by policy and will be denied.",
+    "8. If the same tool call is denied or errors twice in a row, do not retry it a third time — report the failure instead of repeating it.",
     "",
     "# YOUR TOOLS",
     toolList,
@@ -294,19 +370,28 @@ const buildExecutorSystemPrompt = (toolDefs: AgentLoopToolDef[], context?: strin
   return sections.join("\n");
 };
 
-/** Create a "delegate" tool that spawns an executor agent loop with a different model. */
+/** Create a "delegate" tool that spawns an executor (hands) agent loop with a different model. */
 const createDelegateTool = (deps: {
-  executorGateway: ProviderGateway;
-  executorModel: string;
+  /**
+   * Resolved at invocation time (not tool-construction time) so that a
+   * "/model hands use ..." switch takes effect on the very next delegate
+   * call without rebuilding this tool. Mirrors spawn_agent/run_chain's
+   * pattern for the brain role.
+   */
+  getHandsGateway: () => ProviderGateway;
+  getHandsModel: () => string;
   executorTools: Tool[];
   executorToolDefs: AgentLoopToolDef[];
   executorTemperature: number;
   executorMaxTokens: number;
   executorMaxIterations: number;
   executorSystemPromptOverride: string;
+  /** Unset = hands keeps its provider-default (deliberate) thinking behavior. */
+  executorThinkingLevel?: "off" | "low" | "medium" | "high";
   registry: ToolRegistry;
   logger: HairyClawLogger;
   dataDir: string;
+  maxDurationMs: number;
 }): Tool => ({
   name: "delegate",
   description: [
@@ -320,6 +405,8 @@ const createDelegateTool = (deps: {
     "  BAD:  'Help me understand the codebase'",
     "",
     "The executor is a FAST, LITERAL tool-runner — not a thinker. Give it exact commands.",
+    "For network research, the executor uses web-search/web-fetch, not bash curl/wget (blocked by policy).",
+    "If a delegated instruction was just denied or errored, do not delegate the same instruction again this turn — report the failure instead.",
   ].join("\n"),
   parameters: z.object({
     instruction: z
@@ -333,6 +420,10 @@ const createDelegateTool = (deps: {
       .optional()
       .describe("Background info the executor needs (file contents, variable values, etc.)"),
   }),
+  // Keep the registry deadline beyond the agent loop's own bounded deadline
+  // plus one maximum in-flight provider/tool operation. This prevents the
+  // registry from returning a timeout while the executor continues unseen.
+  timeout_ms: deps.maxDurationMs + 130_000,
   async execute(args, ctx) {
     const input = z
       .object({
@@ -349,13 +440,15 @@ const createDelegateTool = (deps: {
       { role: "user", content: [{ type: "text", text: input.instruction }] },
     ];
 
+    const handsModel = deps.getHandsModel();
+
     try {
       const result = await runAgentLoop(loopMessages, {
         provider: {
           stream: (msgs, streamOpts) =>
-            deps.executorGateway.stream(msgs, {
+            deps.getHandsGateway().stream(msgs, {
               ...streamOpts,
-              model: deps.executorModel,
+              model: handsModel,
             }),
         },
         executor: async (name, toolArgs, _callId) => {
@@ -365,18 +458,28 @@ const createDelegateTool = (deps: {
             dataDir: deps.dataDir,
             logger: deps.logger,
             channelId: ctx.channelId,
+            // Defense-in-depth: the executor arm can only call tools it was
+            // explicitly configured with (config.executor.tools), enforced
+            // here even if a future bug widens deps.executorTools upstream.
+            allowedTools: deps.executorTools.map((tool) => tool.name),
           });
-          return { content: execution.content, isError: execution.isError ?? false };
+          return {
+            content: execution.content,
+            isError: execution.isError ?? false,
+            isValidationError: execution.isValidationError,
+          };
         },
         streamOpts: {
-          model: deps.executorModel,
+          model: handsModel,
           systemPrompt,
           tools: deps.executorToolDefs,
           temperature: deps.executorTemperature,
           maxTokens: deps.executorMaxTokens,
+          thinkingLevel: deps.executorThinkingLevel,
         },
         logger: deps.logger,
         maxIterations: deps.executorMaxIterations,
+        maxDurationMs: deps.maxDurationMs,
       });
 
       return {
@@ -669,52 +772,120 @@ const runMaintenanceCommand = async (command: string, deps: MaintenanceDeps): Pr
   deps.logger.warn({ command }, "unknown maintenance command");
 };
 
-const transcribeAudioFile = async (filePath: string, mimeType: string): Promise<string | null> => {
+/**
+ * Bounded, redacted transcription outcome. Never carries raw provider error
+ * bodies, file paths, or transcript content beyond what the caller already
+ * has — /debug and logs should be able to report the `stage` alone without
+ * leaking message content or credentials.
+ */
+export type TranscriptionOutcome =
+  | { stage: "ok"; provider: string; text: string }
+  | { stage: "no_provider" }
+  | { stage: "read_error" }
+  | { stage: "http_error"; provider: string; status: number }
+  | { stage: "exception"; provider: string }
+  | { stage: "empty_transcript"; provider: string };
+
+export const formatVoiceTranscriptForModel = (text: string): string =>
+  `[Voice transcript (authoritative user speech): ${text}]`;
+
+export const buildPersistedUserTurn = (
+  text: string | undefined,
+  voiceTranscripts: string[],
+): string =>
+  [text?.trim(), ...voiceTranscripts.map((transcript) => formatVoiceTranscriptForModel(transcript))]
+    .filter((part): part is string => Boolean(part))
+    .join("\n\n");
+
+const transcribeAudioFile = async (
+  filePath: string,
+  mimeType: string,
+): Promise<TranscriptionOutcome> => {
   const groqKey = process.env.GROQ_API_KEY;
   const openaiKey = process.env.VOICE_TOOLS_OPENAI_KEY;
-  if (!groqKey && !openaiKey) return null;
+  const fallbackUrl = process.env.WHISPER_FALLBACK_URL;
+  if (!groqKey && !openaiKey && !fallbackUrl) return { stage: "no_provider" };
 
-  try {
-    const fileBuffer = await readFile(filePath);
-    const form = new FormData();
-    form.append("file", new Blob([fileBuffer], { type: mimeType }), basename(filePath));
+  const fileBuffer = await readFile(filePath).catch(() => null);
+  if (!fileBuffer) return { stage: "read_error" };
 
-    if (groqKey) {
-      form.append("model", "whisper-large-v3-turbo");
-      const res = await fetch("https://api.groq.com/openai/v1/audio/transcriptions", {
+  // OpenAI-compatible /audio/transcriptions call. Each provider gets its own
+  // FormData (Blob can be consumed only once across separate fetch calls).
+  const tryProvider = async (
+    provider: string,
+    url: string,
+    model: string,
+    auth?: string,
+  ): Promise<TranscriptionOutcome> => {
+    try {
+      const form = new FormData();
+      form.append("file", new Blob([fileBuffer], { type: mimeType }), basename(filePath));
+      form.append("model", model);
+      const res = await fetch(url, {
         method: "POST",
-        headers: { Authorization: `Bearer ${groqKey}` },
+        headers: auth ? { Authorization: `Bearer ${auth}` } : {},
         body: form,
+        signal: AbortSignal.timeout(30_000),
       });
-      if (res.ok) {
-        const data = (await res.json()) as { text?: string };
-        return data.text ?? null;
-      }
-    } else if (openaiKey) {
-      form.append("model", "whisper-1");
-      const res = await fetch("https://api.openai.com/v1/audio/transcriptions", {
-        method: "POST",
-        headers: { Authorization: `Bearer ${openaiKey}` },
-        body: form,
-      });
-      if (res.ok) {
-        const data = (await res.json()) as { text?: string };
-        return data.text ?? null;
-      }
+      if (!res.ok) return { stage: "http_error", provider, status: res.status };
+      const data = (await res.json()) as { text?: string };
+      const text = data.text?.trim();
+      if (!text) return { stage: "empty_transcript", provider };
+      return { stage: "ok", provider, text };
+    } catch {
+      return { stage: "exception", provider };
     }
-  } catch {
-    // transcription failed — fall through
+  };
+
+  const attempts: TranscriptionOutcome[] = [];
+
+  if (groqKey) {
+    const groqBaseUrl = process.env.GROQ_API_BASE_URL ?? "https://api.groq.com";
+    const outcome = await tryProvider(
+      "groq",
+      `${groqBaseUrl.replace(/\/$/, "")}/openai/v1/audio/transcriptions`,
+      "whisper-large-v3-turbo",
+      groqKey,
+    );
+    if (outcome.stage === "ok") return outcome;
+    attempts.push(outcome);
   }
 
-  return null;
+  if (openaiKey) {
+    const outcome = await tryProvider(
+      "openai",
+      "https://api.openai.com/v1/audio/transcriptions",
+      "whisper-1",
+      openaiKey,
+    );
+    if (outcome.stage === "ok") return outcome;
+    attempts.push(outcome);
+  }
+
+  if (fallbackUrl) {
+    const fallbackModel = process.env.WHISPER_FALLBACK_MODEL ?? "Systran/faster-whisper-large-v3";
+    const fallbackKey = process.env.WHISPER_FALLBACK_KEY;
+    const outcome = await tryProvider(
+      "fallback",
+      `${fallbackUrl.replace(/\/$/, "")}/v1/audio/transcriptions`,
+      fallbackModel,
+      fallbackKey,
+    );
+    if (outcome.stage === "ok") return outcome;
+    attempts.push(outcome);
+  }
+
+  // Report the last attempted provider's failure stage (most specific available).
+  return attempts[attempts.length - 1] ?? { stage: "no_provider" };
 };
 
 const main = async (): Promise<void> => {
   const config = await loadHairyClawConfig();
+  const workspaceCwd = process.env.HAIRYCLAW_WORKSPACE_DIR ?? process.cwd();
   const metrics = new Metrics();
 
-  if (config.providers.anthropic.enabled && !config.providers.anthropic.apiKey) {
-    logger.warn("Anthropic enabled but ANTHROPIC_API_KEY is missing; provider disabled");
+  if (config.providers.supergrok.enabled && !config.providers.supergrok.authFile) {
+    logger.warn("SuperGrok enabled but no OAuth credential file is configured; provider disabled");
   }
   if (config.providers.openrouter.enabled && !config.providers.openrouter.apiKey) {
     logger.warn("OpenRouter enabled but OPENROUTER_API_KEY is missing; provider disabled");
@@ -798,10 +969,31 @@ const main = async (): Promise<void> => {
   });
   let lastPromptHash = "";
 
+  // ── Diagnostics (bounded, redacted; feeds /debug and /health) ─────────────
+  const diagnostics = new DiagnosticsRecorder();
+  const recordDiagnostic = (
+    category: string,
+    stage: string,
+    meta?: Record<string, string | number | boolean>,
+  ): void => diagnostics.record(category, stage, meta);
+
   // ── Tools ────────────────────────────────────────────────────────────────
   // Full registry — all tools registered here, mode determines which the LLM sees.
-  const registry = new ToolRegistry({ logger });
-  registry.register(createBashTool());
+  // ApprovalGate activated with a fail-closed handler: HairyClaw does not yet
+  // have a real async /approve token exchange, so high-impact tool calls that
+  // match DEFAULT_APPROVAL_POLICY (destructive bash, config/system writes,
+  // network installs, etc.) are denied rather than faked as approved. See
+  // packages/tools/src/approval.ts for the documented limitation.
+  const registry = new ToolRegistry({
+    logger,
+    approvalGate: new ApprovalGate(DEFAULT_APPROVAL_POLICY, failClosedApprovalHandler, logger),
+  });
+  registry.register(
+    createBashTool({
+      allowShellOperators: true,
+      blockedCommands: ["shutdown", "reboot", "mkfs", "dd"],
+    }),
+  );
   registry.register(createReadTool());
   registry.register(createWriteTool());
   registry.register(createEditTool());
@@ -811,7 +1003,9 @@ const main = async (): Promise<void> => {
   registry.register(createReminderTool({ agentName: config.agentName }));
   registry.register(createPdfExtractTool());
   const sshAllowedHosts = process.env.SSH_ALLOWED_HOSTS
-    ? process.env.SSH_ALLOWED_HOSTS.split(",").map((h) => h.trim()).filter(Boolean)
+    ? process.env.SSH_ALLOWED_HOSTS.split(",")
+        .map((h) => h.trim())
+        .filter(Boolean)
     : [];
   registry.register(createSshExecTool({ allowedHosts: sshAllowedHosts }));
   registry.register(createVideoDownloadTool());
@@ -823,11 +1017,16 @@ const main = async (): Promise<void> => {
   // Tool defs are finalized after providers are set up (orchestrator mode needs buildGatewayForModel).
   // Placeholder — populated below after provider setup.
   let toolDefs: AgentLoopToolDef[] = [];
-  const isOrchestratorMode = config.agentMode === "orchestrator";
   let orchestratorModel = "";
   let orchestratorProvider = "";
   let executorModel = "";
   let executorProvider = "";
+  // Role-aware (brain_hands / orchestrator mode) durable model selection.
+  // null in unified mode — unified mode is unaffected and keeps using
+  // modelSelectionStore/primaryGateway below exactly as before.
+  let roleModelStore: RoleModelSelectionStore | null = null;
+  let brainGateway: ProviderGateway | null = null;
+  let handsGateway: ProviderGateway | null = null;
 
   // ── Providers ────────────────────────────────────────────────────────────
   const providers = buildProviders(config);
@@ -840,21 +1039,100 @@ const main = async (): Promise<void> => {
     providers.map((provider) => provider.name),
   );
 
-  const modelAliases = new Set<string>();
   const providerDefaultModels = new Map<string, string>();
   for (const provider of providers) {
-    const model = defaultModelForProvider(config, provider.name);
-    providerDefaultModels.set(provider.name, model);
-    modelAliases.add(`${provider.name}/${model}`);
-  }
-  for (const candidate of config.routing.modelFallbackChain) {
-    modelAliases.add(candidate);
+    providerDefaultModels.set(provider.name, defaultModelForProvider(config, provider.name));
   }
 
-  let activePrimaryModel = `${routing.defaultProvider}/${
-    providerDefaultModels.get(routing.defaultProvider) ??
-    defaultModelForProvider(config, routing.defaultProvider)
-  }`;
+  // Parsed here (not just inside the orchestrator tool-wiring block below) so
+  // the configured brain/hands model strings can be added to the catalog
+  // before it's constructed — otherwise a deployment-specific model id would
+  // never be selectable and role seeding would silently fall back to the
+  // shared safe default.
+  const isOrchestratorMode = config.agentMode === "orchestrator";
+  const orchSpecForCatalog =
+    isOrchestratorMode && config.orchestratorConfig.model.trim()
+      ? parseModelSpec(config.orchestratorConfig.model, config.routing.defaultProvider)
+      : null;
+  const execSpecForCatalog =
+    isOrchestratorMode && config.executorConfig.model.trim()
+      ? parseModelSpec(config.executorConfig.model, config.routing.defaultProvider)
+      : null;
+
+  // ── Model catalog + durable selection ───────────────────────────────────
+  // Availability is derived from the providers actually constructed above,
+  // never from catalog text alone. Grok is selectable only when the exact
+  // SuperGrok OAuth provider is configured and constructed.
+  const constructedProviderNames = providers.map((provider) => provider.name);
+  const extraCatalogEntries = [orchSpecForCatalog, execSpecForCatalog]
+    .filter((spec): spec is { provider: string; model: string } => Boolean(spec?.model))
+    .map((spec) => ({
+      id: `${spec.provider}/${spec.model}`,
+      provider: spec.provider,
+      model: spec.model,
+      label: `${spec.provider}/${spec.model} (configured brain_hands role default)`,
+      available: true,
+    }));
+  const modelCatalog = new ModelCatalog(
+    reconcileCatalogWithProviders({
+      entries: [...DEFAULT_MODEL_CATALOG, ...extraCatalogEntries],
+      constructedProviders: constructedProviderNames,
+      providerDefaultModels,
+    }),
+  );
+  // No hard-pinned safe default: prefer the configured Ollama model when
+  // Ollama is enabled/constructed, otherwise the first constructed
+  // provider's own configured default model. Throws (failing startup with an
+  // actionable message) if no constructed provider has an available model.
+  const SAFE_DEFAULT_MODEL_ID = resolveSafeDefaultModelId({
+    catalog: modelCatalog,
+    ollamaEnabled: config.providers.ollama.enabled,
+    ollamaDefaultModel: config.providers.ollama.defaultModel,
+    constructedProviderOrder: constructedProviderNames,
+    providerDefaultModels,
+  });
+  const configuredFallbackIds = routing.modelFallbackChain
+    .map((entry) => `${entry.provider}/${entry.model}`)
+    .filter((id) => id !== SAFE_DEFAULT_MODEL_ID && modelCatalog.isSelectable(id));
+  const modelSelectionStore = new ModelSelectionStore({
+    filePath: join(config.dataDir, "providers", "model-selection.json"),
+    defaultPrimaryId: SAFE_DEFAULT_MODEL_ID,
+    defaultFallbackIds: configuredFallbackIds,
+    logger,
+  });
+  await modelSelectionStore.load();
+
+  const isOperator = buildOperatorAuthorizer(config.operatorAllowlist);
+
+  const resolveActiveChain = () => {
+    const current = modelSelectionStore.getCurrent();
+    return resolveModelChain({
+      catalog: modelCatalog,
+      requestedPrimaryId: current.primaryId,
+      fallbackIds: current.fallbackIds,
+      safeDefaultId: SAFE_DEFAULT_MODEL_ID,
+    });
+  };
+
+  /**
+   * Role-aware equivalent of resolveActiveChain, only meaningful once
+   * roleModelStore is constructed (isOrchestratorMode). Resolution never
+   * crosses roles: brain's chain only ever contains brain's own configured
+   * primary/fallbacks (and the shared safe default), never hands', and
+   * vice versa.
+   */
+  const resolveActiveChainForRole = (role: ModelRole) => {
+    if (!roleModelStore) {
+      throw new Error("resolveActiveChainForRole called outside brain_hands/orchestrator mode");
+    }
+    const current = roleModelStore.getCurrent(role);
+    return resolveModelChain({
+      catalog: modelCatalog,
+      requestedPrimaryId: current.primaryId,
+      fallbackIds: current.fallbackIds,
+      safeDefaultId: SAFE_DEFAULT_MODEL_ID,
+    });
+  };
 
   const authProfiles = new AuthProfileManager({
     filePath: join(config.dataDir, "providers", "auth-profiles.json"),
@@ -864,15 +1142,6 @@ const main = async (): Promise<void> => {
     logger,
   });
   await authProfiles.load();
-
-  if (config.providers.anthropic.enabled && config.providers.anthropic.apiKey) {
-    authProfiles.addProfile({
-      id: "anthropic:env",
-      provider: "anthropic",
-      type: "api_key",
-      credential: config.providers.anthropic.apiKey,
-    });
-  }
 
   if (config.providers.openrouter.enabled && config.providers.openrouter.apiKey) {
     authProfiles.addProfile({
@@ -928,7 +1197,58 @@ const main = async (): Promise<void> => {
       },
       metrics,
       authProfiles,
+      maxCredentialRefreshes: MAX_PROVIDER_RETRIES_PER_ATTEMPT,
     });
+  };
+
+  /**
+   * Build a gateway from an explicit, already-ordered {provider, model} chain
+   * (as produced by resolveModelChain from the catalog + durable selection
+   * store). chain[0] is always attempt zero; entries are never re-paired
+   * across providers.
+   */
+  const buildGatewayForChain = (
+    chain: Array<{ provider: string; model: string }>,
+  ): ProviderGateway => {
+    const primary = chain[0];
+    const fallbackChain = [
+      primary.provider,
+      ...routing.fallbackChain.filter((entry) => entry !== primary.provider),
+    ];
+
+    return new ProviderGateway({
+      providers,
+      routingConfig: {
+        defaultProvider: primary.provider,
+        fallbackChain,
+        modelFallbackChain: chain.map((entry) => ({
+          provider: entry.provider,
+          model: entry.model,
+          timeoutMs: config.resilience.requestTimeoutMs,
+        })),
+      },
+      metrics,
+      authProfiles,
+      maxCredentialRefreshes: MAX_PROVIDER_RETRIES_PER_ATTEMPT,
+    });
+  };
+
+  // The primary interactive gateway is long-lived (rebuilt only when the
+  // model selection changes) so its circuit breaker / rate-limit state is
+  // meaningful across messages instead of resetting on every turn.
+  let primaryGateway = buildGatewayForChain(resolveActiveChain().chain);
+  const rebuildPrimaryGateway = (): void => {
+    primaryGateway = buildGatewayForChain(resolveActiveChain().chain);
+  };
+
+  // Role gateways are rebuilt independently per role: switching brain's
+  // model never rebuilds (and never resets the circuit-breaker/rate-limit
+  // state of) hands' gateway, and vice versa.
+  const rebuildBrainGateway = (): void => {
+    brainGateway = buildGatewayForChain(resolveActiveChainForRole("brain").chain);
+  };
+  const rebuildHandsGateway = (): void => {
+    handsGateway = buildGatewayForChain(resolveActiveChainForRole("hands").chain);
   };
 
   // ── Finalize tool defs (after providers + gateway are ready) ───────────
@@ -945,32 +1265,131 @@ const main = async (): Promise<void> => {
 
     if (!orchestratorModel || !executorModel) {
       throw new Error(
-        "Orchestrator mode requires both [orchestrator].model and [executor].model to be set. " +
+        "Orchestrator (brain_hands) mode requires both [orchestrator].model and [executor].model to be set. " +
           'Format: "provider/model" (e.g. "openrouter/glm-5:cloud")',
       );
     }
 
-    const executorToolNames = new Set(config.executorConfig.tools);
+    // If the configured brain/hands model isn't a catalogued+available id
+    // (e.g. it isn't in DEFAULT_MODEL_CATALOG, or its provider isn't
+    // constructed), the role is seeded from SAFE_DEFAULT_MODEL_ID instead —
+    // never from a hard-pinned id that might not exist for this deployment.
+    const brainConfiguredId = `${orchestratorProvider}/${orchestratorModel}`;
+    const handsConfiguredId = `${executorProvider}/${executorModel}`;
+    const brainDefaultId = modelCatalog.isSelectable(brainConfiguredId)
+      ? brainConfiguredId
+      : SAFE_DEFAULT_MODEL_ID;
+    const handsDefaultId = modelCatalog.isSelectable(handsConfiguredId)
+      ? handsConfiguredId
+      : SAFE_DEFAULT_MODEL_ID;
+    const resolveRoleFallbackDefaults = (ids: string[], role: ModelRole): string[] => {
+      const primaryId = role === "brain" ? brainDefaultId : handsDefaultId;
+      const selected: string[] = [];
+      for (const id of ids) {
+        if (id === primaryId || selected.includes(id)) continue;
+        if (!modelCatalog.isSelectable(id)) {
+          logger.warn(
+            { role, configuredFallbackId: id },
+            "configured role fallback is unknown or unavailable; skipping",
+          );
+          continue;
+        }
+        selected.push(id);
+      }
+      return selected;
+    };
+    const brainFallbackDefaults = resolveRoleFallbackDefaults(
+      config.orchestratorConfig.fallbackModels.length > 0
+        ? config.orchestratorConfig.fallbackModels
+        : configuredFallbackIds,
+      "brain",
+    );
+    const handsFallbackDefaults = resolveRoleFallbackDefaults(
+      config.executorConfig.fallbackModels.length > 0
+        ? config.executorConfig.fallbackModels
+        : configuredFallbackIds,
+      "hands",
+    );
+    if (brainDefaultId === SAFE_DEFAULT_MODEL_ID && brainConfiguredId !== SAFE_DEFAULT_MODEL_ID) {
+      logger.warn(
+        { configured: brainConfiguredId, using: SAFE_DEFAULT_MODEL_ID },
+        "configured [orchestrator].model is not in the catalog/provisioned; brain role seeded from the safe default instead",
+      );
+    }
+    if (handsDefaultId === SAFE_DEFAULT_MODEL_ID && handsConfiguredId !== SAFE_DEFAULT_MODEL_ID) {
+      logger.warn(
+        { configured: handsConfiguredId, using: SAFE_DEFAULT_MODEL_ID },
+        "configured [executor].model is not in the catalog/provisioned; hands role seeded from the safe default instead",
+      );
+    }
+
+    // Durable, role-aware selection. Config values above are used only to
+    // seed defaults on first run (or migrate a legacy unified selection into
+    // "brain") — after that, durable role selections (mutable via
+    // /model brain|hands ...) are the runtime source of truth.
+    roleModelStore = new RoleModelSelectionStore({
+      dataDir: join(config.dataDir, "providers"),
+      legacyFilePath: join(config.dataDir, "providers", "model-selection.json"),
+      defaultPrimaryId: { brain: brainDefaultId, hands: handsDefaultId },
+      defaultFallbackIds: { brain: brainFallbackDefaults, hands: handsFallbackDefaults },
+      logger,
+    });
+    await roleModelStore.load();
+    if (roleModelStore.didMigrateLegacy()) {
+      logger.info(
+        { role: "brain" },
+        "migrated legacy unified-mode model selection into the brain role",
+      );
+    }
+
+    brainGateway = buildGatewayForChain(resolveActiveChainForRole("brain").chain);
+    handsGateway = buildGatewayForChain(resolveActiveChainForRole("hands").chain);
+
+    // Configured tool names are validated + canonicalized before use: legacy
+    // underscore aliases (web_search/web_fetch) resolve to the actually
+    // registered hyphenated tool names (web-search/web-fetch), and any
+    // truly unknown configured name throws here — before agent startup —
+    // rather than being silently filtered out of the executor's tool set.
+    const registeredToolNames = registry.list().map((tool) => tool.name);
+    const executorToolNames = new Set(
+      resolveConfiguredToolNames(config.executorConfig.tools, registeredToolNames),
+    );
     const executorTools = registry.list().filter((tool) => executorToolNames.has(tool.name));
     const executorToolDefs = executorTools.map(toolToDefinition);
-    const executorGateway = buildGatewayForModel(executorProvider, executorModel);
 
     const delegateTool = createDelegateTool({
-      executorGateway,
-      executorModel,
+      getHandsGateway: () => {
+        if (!handsGateway) throw new Error("hands gateway not initialized");
+        return handsGateway;
+      },
+      getHandsModel: () => resolveActiveChainForRole("hands").primary.model,
       executorTools,
       executorToolDefs,
       executorTemperature: config.executorConfig.temperature,
       executorMaxTokens: config.executorConfig.maxTokens,
       executorMaxIterations: config.executorConfig.maxIterations,
       executorSystemPromptOverride: config.executorConfig.systemPrompt,
+      executorThinkingLevel: config.executorConfig.thinkingLevel,
       registry,
       logger,
       dataDir: config.dataDir,
+      maxDurationMs: 300_000,
     });
     registry.register(delegateTool);
 
-    const orchestratorToolNames = new Set(config.orchestratorConfig.tools);
+    // Brain (controller) tool exposure is intentionally minimal — the tools
+    // named in [orchestrator].tools (delegate + memory by default). Brain
+    // never silently inherits the full execution tool surface: technical
+    // work is an explicit delegation decision (the "delegate" tool call
+    // above), not an implicit fallback. Same alias/validation as executor
+    // tools above — recomputed against the registry now that "delegate"
+    // (registered just above) is itself a valid, resolvable tool name.
+    const orchestratorToolNames = new Set(
+      resolveConfiguredToolNames(
+        config.orchestratorConfig.tools,
+        registry.list().map((tool) => tool.name),
+      ),
+    );
     toolDefs = registry
       .list()
       .filter((tool) => orchestratorToolNames.has(tool.name))
@@ -979,74 +1398,121 @@ const main = async (): Promise<void> => {
     logger.info(
       {
         mode: "orchestrator",
-        brain: `${orchestratorProvider}/${orchestratorModel}`,
-        hands: `${executorProvider}/${executorModel}`,
+        brain: resolveActiveChainForRole("brain").chain[0],
+        hands: resolveActiveChainForRole("hands").chain[0],
         orchestratorTools: toolDefs.map((t) => t.name),
         executorTools: executorToolDefs.map((t) => t.name),
       },
-      "orchestrator/executor mode configured",
+      "brain_hands (orchestrator) mode configured",
     );
   } else {
-    const primarySpec = parseModelSpec(activePrimaryModel, routing.defaultProvider);
-    const spawnGateway = buildGatewayForModel(primarySpec.provider, primarySpec.model);
-    const spawnTools = registry.list().filter((t) =>
-      ["bash", "read", "write", "edit", "web_search", "web_fetch", "pdf-extract", "video_download", "video_extract"].includes(t.name),
-    );
+    // Child tool profile: strictly narrower than the primary operator's full
+    // registry — bash/ssh_exec/browser/identity_evolve/delegate/spawn_agent/
+    // run_chain are removed by default so a spawned child can never invoke a
+    // hidden tool by name. Enforced at ToolRegistry.execute, not just here.
+    const allToolNames = registry.list().map((tool) => tool.name);
+    const childProfile = buildChildProfile(allToolNames);
+    const spawnTools = registry
+      .list()
+      .filter((tool) => childProfile.allowedTools.includes(tool.name));
+    const childToolExecutor = async (
+      name: string,
+      toolArgs: unknown,
+      toolCallId?: string,
+    ): Promise<{ content: string; isError: boolean; isValidationError?: boolean }> => {
+      const t0 = Date.now();
+      const execution = await registry.execute(name, toolArgs, {
+        traceId: toolCallId || "child",
+        cwd: workspaceCwd,
+        dataDir: config.dataDir,
+        logger,
+        allowedTools: childProfile.allowedTools,
+      });
+      agentDb.logToolExecution(
+        toolCallId || "child",
+        "child",
+        name,
+        toolArgs,
+        execution.content,
+        Date.now() - t0,
+        execution.isError ?? false,
+      );
+      return {
+        content: execution.content,
+        isError: execution.isError ?? false,
+        isValidationError: execution.isValidationError,
+      };
+    };
+
     const spawnAgentTool = createSubAgentTool({
       name: "spawn_agent",
       description:
         "Spawn an autonomous sub-agent to complete a self-contained task. " +
         "Use this when a task requires many sequential steps, file operations, or extended research " +
-        "that would clutter the main conversation. Returns the agent's final answer.",
-      systemPrompt: "You are a focused task executor. Complete the given task step by step using the available tools. Be concise and return only the final result.",
+        "that would clutter the main conversation. Returns the agent's final answer. " +
+        "The sub-agent has a restricted tool set (no shell/ssh/browser/identity/delegation tools).",
+      systemPrompt:
+        "You are a focused autonomous partner-agent. Complete the given task step by step using your available tools: file edits, web research, reminders, media/pdf tools, and memory. Be concise but do the work; return final result plus any important changed files.",
+      // Resolve the durable primary at invocation time (not startup): after
+      // an operator runs /model use, spawn_agent must pick up the new
+      // selection on its very next call. Streams through the same long-lived
+      // primaryGateway used by the main loop (rebuilt on model change) so
+      // circuit-breaker/rate-limit state is shared and meaningful.
       provider: {
-        stream: (msgs, streamOpts) =>
-          spawnGateway.stream(msgs, { ...streamOpts, model: primarySpec.model }),
+        stream: (msgs, streamOpts) => {
+          const current = resolveActiveChain().primary;
+          return primaryGateway.stream(msgs, { ...streamOpts, model: current.model });
+        },
       },
       tools: spawnTools,
-      maxIterations: 25,
+      executor: childToolExecutor,
+      maxIterations: CHILD_MAX_ITERATIONS,
       timeoutMs: 180_000,
       logger,
     });
     registry.register(spawnAgentTool);
 
     // ── Agent chains (build / design / document / implement / qlt) ───────────
-    const chainTools = registry.list().filter((t) =>
-      ["bash", "read", "write", "edit", "web_search", "web_fetch", "pdf-extract",
-       "video_download", "video_extract", "memory_recall", "memory_ingest"].includes(t.name),
-    );
+    const chainTools = registry
+      .list()
+      .filter((tool) => tool.name !== "run_chain" && childProfile.allowedTools.includes(tool.name));
     const chainTool = createChainTool({
-      defaultModel: primarySpec.model,
+      // Resolve the durable primary at invocation time (not startup), same
+      // reasoning as spawn_agent above.
+      defaultModel: () => resolveActiveChain().primary.model,
       providerFactory: (model, thinking) => ({
-        stream: (msgs, streamOpts) =>
-          buildGatewayForModel(primarySpec.provider, model).stream(msgs, {
+        stream: (msgs, streamOpts) => {
+          const current = resolveActiveChain().primary;
+          return buildGatewayForModel(current.provider, model).stream(msgs, {
             ...streamOpts,
             model,
             thinkingLevel: thinking,
-          }),
+          });
+        },
       }),
       tools: chainTools,
+      executor: childToolExecutor,
       logger,
       modelOverrides: {
         // build: scout+reviewer on glm, planner+coder on kimi
-        "build.scout":    "glm-5.1:cloud",
-        "build.planner":  "kimi-k2.6:cloud",
-        "build.coder":    "kimi-k2.6:cloud",
+        "build.scout": "glm-5.1:cloud",
+        "build.planner": "kimi-k2.6:cloud",
+        "build.coder": "kimi-k2.6:cloud",
         "build.reviewer": "glm-5.1:cloud",
         // design: scout+reviewer on glm/gemma, planner+designer on kimi
-        "design.scout":    "glm-5.1:cloud",
-        "design.planner":  "kimi-k2.6:cloud",
+        "design.scout": "glm-5.1:cloud",
+        "design.planner": "kimi-k2.6:cloud",
         "design.designer": "kimi-k2.6:cloud",
         "design.reviewer": "gemma4:31b-cloud",
         // document: glm for structure, gemma for prose
-        "document.planner":  "glm-5.1:cloud",
-        "document.writer":   "gemma4:31b-cloud",
+        "document.planner": "glm-5.1:cloud",
+        "document.writer": "gemma4:31b-cloud",
         "document.reviewer": "glm-5.1:cloud",
         // implement: kimi codes, glm reviews
-        "implement.coder":    "kimi-k2.6:cloud",
+        "implement.coder": "kimi-k2.6:cloud",
         "implement.reviewer": "glm-5.1:cloud",
         // qlt: kimi analyses, glm reports
-        "qlt.analyst":  "kimi-k2.6:cloud",
+        "qlt.analyst": "kimi-k2.6:cloud",
         "qlt.reviewer": "glm-5.1:cloud",
       },
     });
@@ -1211,11 +1677,6 @@ const main = async (): Promise<void> => {
     }
   };
 
-  const fallbackModelList = (): string[] =>
-    routing.modelFallbackChain
-      .map((entry) => `${entry.provider}/${entry.model}`)
-      .filter((entry) => entry !== activePrimaryModel);
-
   const metricSnapshot = (): Record<string, number> => {
     const output: Record<string, number> = {};
     const all = metrics.getAll();
@@ -1232,32 +1693,304 @@ const main = async (): Promise<void> => {
     return output;
   };
 
+  // Legacy (role-less) /model use|fallback|test|rollback and /status are the
+  // unified/brain alias: in unified mode they operate on modelSelectionStore
+  // + primaryGateway exactly as before; in brain_hands (orchestrator) mode
+  // they operate on the "brain" role so existing operator habits/scripts
+  // keep working unchanged.
+  const legacyResolveChain = () =>
+    isOrchestratorMode && roleModelStore
+      ? resolveActiveChainForRole("brain")
+      : resolveActiveChain();
+  const legacyGateway = (): ProviderGateway =>
+    isOrchestratorMode && brainGateway ? brainGateway : primaryGateway;
+  const legacyRebuildGateway = (): void => {
+    if (isOrchestratorMode && roleModelStore) rebuildBrainGateway();
+    else rebuildPrimaryGateway();
+  };
+
+  const modelInfoFromChain = (): { primary: string; fallbacks: string[] } => {
+    const resolved = legacyResolveChain();
+    return {
+      primary: `${resolved.primary.provider}/${resolved.primary.model}`,
+      fallbacks: resolved.chain.slice(1).map((entry) => `${entry.provider}/${entry.model}`),
+    };
+  };
+
+  /** Shared canary logic for both the legacy /model test and role-scoped /model brain|hands test. */
+  const testModelId = async (id: string): Promise<ModelCommandResult> => {
+    const entry = modelCatalog.get(id);
+    if (!entry) return { ok: false, message: `"${id}" is not in the model catalog.` };
+    if (!entry.available) {
+      return {
+        ok: false,
+        message: `"${id}" is catalogued but unavailable (${entry.unavailableReason ?? "unavailable"}).`,
+      };
+    }
+    const testGateway = buildGatewayForChain([{ provider: entry.provider, model: entry.model }]);
+    try {
+      let sawText = false;
+      for await (const event of testGateway.stream(
+        [{ role: "user", content: [{ type: "text", text: "Reply with the single word: pong" }] }],
+        { model: entry.model, maxTokens: 16, timeoutMs: 20_000 },
+      )) {
+        if (event.type === "text_delta" && event.text) sawText = true;
+        if (event.type === "error") {
+          return { ok: false, message: `Canary failed for ${id}: ${event.error}` };
+        }
+      }
+      return sawText
+        ? { ok: true, message: `Canary succeeded for ${id}.` }
+        : { ok: false, message: `Canary for ${id} produced no output.` };
+    } catch (error: unknown) {
+      return {
+        ok: false,
+        message: `Canary threw for ${id}: ${error instanceof Error ? error.message : String(error)}`,
+      };
+    }
+  };
+
+  /** Bounded, redacted per-role summary for /debug: role, resolved chain, last-success + latency, circuits. Never prompts/credentials/chat ids. */
+  const debugRoleSummary = (role: ModelRole): Record<string, unknown> | undefined => {
+    if (!roleModelStore) return undefined;
+    const gateway = role === "brain" ? brainGateway : handsGateway;
+    if (!gateway) return undefined;
+    const current = roleModelStore.getCurrent(role);
+    const resolved = resolveActiveChainForRole(role);
+    const lastSuccess = gateway.getLastSuccessfulAttempt();
+    return {
+      configuredPrimaryId: current.primaryId,
+      configuredFallbackIds: current.fallbackIds,
+      resolvedChain: resolved.chain.map((entry) => `${entry.provider}/${entry.model}`),
+      lastSuccessfulModel: lastSuccess ? `${lastSuccess.provider}/${lastSuccess.model}` : null,
+      lastSuccessLatencyMs: lastSuccess?.latencyMs ?? null,
+      circuits: gateway.getCircuitState(),
+    };
+  };
+
   const commandRuntime = {
-    getModelInfo: () => ({ primary: activePrimaryModel, fallbacks: fallbackModelList() }),
-    setPrimaryModel: (model: string) => {
-      const normalized = model.trim();
-      if (modelAliases.has(normalized)) {
-        activePrimaryModel = normalized;
-        return true;
-      }
-
-      const providerDefault = providerDefaultModels.get(normalized);
-      if (providerDefault) {
-        activePrimaryModel = `${normalized}/${providerDefault}`;
-        return true;
-      }
-
-      return false;
-    },
+    isOperator,
+    getModelInfo: modelInfoFromChain,
     getProviderHealth: () => authProfiles.getHealthSnapshot(),
     clearCooldowns: clearAllCooldowns,
     getUptime: () => process.uptime(),
     getMetrics: metricSnapshot,
     getQueueStats: () => deliveryQueue.stats(),
+    getDebugSnapshot: (): Record<string, unknown> => {
+      const gateway = legacyGateway();
+      const current =
+        isOrchestratorMode && roleModelStore
+          ? roleModelStore.getCurrent("brain")
+          : modelSelectionStore.getCurrent();
+      const resolved = legacyResolveChain();
+      const lastSuccess = gateway.getLastSuccessfulAttempt();
+      const roleDiagnostics =
+        isOrchestratorMode && roleModelStore
+          ? {
+              // Bounded, redacted per-role diagnostics: role, resolved chain,
+              // last-success provider/model + latency, and circuit/rate-limit
+              // state only — never prompts, credentials, chat ids, or
+              // message content.
+              brain: debugRoleSummary("brain"),
+              hands: debugRoleSummary("hands"),
+            }
+          : undefined;
+      return {
+        mode: config.agentMode,
+        // Never a single ambiguous "model" field: configured selection,
+        // resolved attempt chain, and last actually-successful model are
+        // reported separately so /debug can't mislabel configured state as
+        // provider-effective.
+        model: {
+          configuredPrimaryId: current.primaryId,
+          configuredFallbackIds: current.fallbackIds,
+          resolvedChain: resolved.chain.map((entry) => `${entry.provider}/${entry.model}`),
+          resolvedWarnings: resolved.warnings,
+          lastSuccessfulModel: lastSuccess ? `${lastSuccess.provider}/${lastSuccess.model}` : null,
+          lastSuccessLatencyMs: lastSuccess?.latencyMs ?? null,
+        },
+        ...(roleDiagnostics ? { roles: roleDiagnostics } : {}),
+        circuits: gateway.getCircuitState(),
+        rateLimits: gateway.getRateLimitState(),
+        lastAttemptFailures: gateway.getLastAttemptFailures().map((failure) => ({
+          provider: failure.provider,
+          model: failure.model,
+          reason: failure.reason,
+          advanced: failure.advanced,
+          at: failure.at,
+        })),
+        channels: channelAdapters.map((ch) => ({
+          type: ch.channelType,
+          connected: ch.isConnected(),
+        })),
+        queue: deliveryQueue.stats(),
+        diagnostics: diagnostics.snapshot(),
+        diagnosticCounts: diagnostics.counts(),
+      };
+    },
+    listModelCatalog: (): ModelCatalogEntrySummary[] =>
+      modelCatalog.list().map((entry) => ({
+        id: entry.id,
+        label: entry.label,
+        available: entry.available,
+        ...(entry.unavailableReason ? { unavailableReason: entry.unavailableReason } : {}),
+      })),
+    getModelStatus: (): ModelStatusSnapshot => {
+      const current =
+        isOrchestratorMode && roleModelStore
+          ? roleModelStore.getCurrent("brain")
+          : modelSelectionStore.getCurrent();
+      const resolved = legacyResolveChain();
+      const gateway = legacyGateway();
+      const circuits = gateway.getCircuitState() as Record<string, CircuitStateSummary>;
+      const lastSuccess = gateway.getLastSuccessfulAttempt();
+      return {
+        configuredPrimaryId: current.primaryId,
+        configuredFallbackIds: current.fallbackIds,
+        resolvedChain: resolved.chain.map((entry) => `${entry.provider}/${entry.model}`),
+        resolvedWarnings: resolved.warnings,
+        lastSuccessfulModel: lastSuccess
+          ? `${lastSuccess.provider}/${lastSuccess.model}`
+          : undefined,
+        updatedAt: current.updatedAt,
+        updatedBy: current.updatedBy,
+        circuits,
+        rateLimits: gateway.getRateLimitState(),
+      };
+    },
+    useModel: async (id: string, actor: string): Promise<ModelCommandResult> => {
+      if (!modelCatalog.isSelectable(id)) {
+        const entry = modelCatalog.get(id);
+        const reason = !entry
+          ? "not in the model catalog"
+          : `catalogued but unavailable (${entry.unavailableReason ?? "unavailable"})`;
+        return { ok: false, message: `Cannot switch to "${id}": ${reason}.` };
+      }
+      if (isOrchestratorMode && roleModelStore) {
+        await roleModelStore.setPrimary("brain", id, actor);
+      } else {
+        await modelSelectionStore.setPrimary(id, actor);
+      }
+      legacyRebuildGateway();
+      return { ok: true, message: `Primary model switched to ${id}.` };
+    },
+    setModelFallbacks: async (ids: string[], actor: string): Promise<ModelCommandResult> => {
+      const invalid = ids.filter((id) => !modelCatalog.isSelectable(id));
+      if (invalid.length > 0) {
+        return {
+          ok: false,
+          message: `Not setting fallbacks: unknown or unavailable model id(s): ${invalid.join(", ")}.`,
+        };
+      }
+      if (isOrchestratorMode && roleModelStore) {
+        await roleModelStore.setFallbacks("brain", ids, actor);
+      } else {
+        await modelSelectionStore.setFallbacks(ids, actor);
+      }
+      legacyRebuildGateway();
+      return { ok: true, message: `Fallback chain set to: ${ids.join(", ") || "(none)"}.` };
+    },
+    testModel: async (id: string): Promise<ModelCommandResult> => testModelId(id),
+    rollbackModel: async (actor: string): Promise<ModelCommandResult> => {
+      const previous =
+        isOrchestratorMode && roleModelStore
+          ? await roleModelStore.rollback("brain", actor)
+          : await modelSelectionStore.rollback(actor);
+      if (!previous) {
+        return { ok: false, message: "No previous model selection to roll back to." };
+      }
+      legacyRebuildGateway();
+      return { ok: true, message: `Rolled back to primary=${previous.primaryId}.` };
+    },
+
+    // ── Role-aware model selection (brain_hands / orchestrator mode) ──────
+    isRoleAwareModelSelectionEnabled: () => isOrchestratorMode && roleModelStore !== null,
+    getModelStatusForRole: (role: ModelRole): RoleModelStatusSnapshot => {
+      if (!roleModelStore) {
+        throw new Error("role-aware model selection is not enabled in this runtime");
+      }
+      const current = roleModelStore.getCurrent(role);
+      const resolved = resolveActiveChainForRole(role);
+      const gateway = role === "brain" ? brainGateway : handsGateway;
+      if (!gateway) {
+        throw new Error(`${role} gateway not initialized`);
+      }
+      const circuits = gateway.getCircuitState() as Record<string, CircuitStateSummary>;
+      const lastSuccess = gateway.getLastSuccessfulAttempt();
+      return {
+        role,
+        configuredPrimaryId: current.primaryId,
+        configuredFallbackIds: current.fallbackIds,
+        resolvedChain: resolved.chain.map((entry) => `${entry.provider}/${entry.model}`),
+        resolvedWarnings: resolved.warnings,
+        lastSuccessfulModel: lastSuccess
+          ? `${lastSuccess.provider}/${lastSuccess.model}`
+          : undefined,
+        lastSuccessLatencyMs: lastSuccess?.latencyMs,
+        updatedAt: current.updatedAt,
+        updatedBy: current.updatedBy,
+        circuits,
+        rateLimits: gateway.getRateLimitState(),
+      };
+    },
+    useModelForRole: async (
+      role: ModelRole,
+      id: string,
+      actor: string,
+    ): Promise<ModelCommandResult> => {
+      if (!roleModelStore) {
+        return { ok: false, message: "Role-aware model selection is not enabled in this runtime." };
+      }
+      if (!modelCatalog.isSelectable(id)) {
+        const entry = modelCatalog.get(id);
+        const reason = !entry
+          ? "not in the model catalog"
+          : `catalogued but unavailable (${entry.unavailableReason ?? "unavailable"})`;
+        return { ok: false, message: `Cannot switch ${role} to "${id}": ${reason}.` };
+      }
+      await roleModelStore.setPrimary(role, id, actor);
+      if (role === "brain") rebuildBrainGateway();
+      else rebuildHandsGateway();
+      return { ok: true, message: `${role} primary model switched to ${id}.` };
+    },
+    setModelFallbacksForRole: async (
+      role: ModelRole,
+      ids: string[],
+      actor: string,
+    ): Promise<ModelCommandResult> => {
+      if (!roleModelStore) {
+        return { ok: false, message: "Role-aware model selection is not enabled in this runtime." };
+      }
+      const invalid = ids.filter((id) => !modelCatalog.isSelectable(id));
+      if (invalid.length > 0) {
+        return {
+          ok: false,
+          message: `Not setting ${role} fallbacks: unknown or unavailable model id(s): ${invalid.join(", ")}.`,
+        };
+      }
+      await roleModelStore.setFallbacks(role, ids, actor);
+      if (role === "brain") rebuildBrainGateway();
+      else rebuildHandsGateway();
+      return { ok: true, message: `${role} fallback chain set to: ${ids.join(", ") || "(none)"}.` };
+    },
+    testModelForRole: async (_role: ModelRole, id: string): Promise<ModelCommandResult> =>
+      testModelId(id),
+    rollbackModelForRole: async (role: ModelRole, actor: string): Promise<ModelCommandResult> => {
+      if (!roleModelStore) {
+        return { ok: false, message: "Role-aware model selection is not enabled in this runtime." };
+      }
+      const previous = await roleModelStore.rollback(role, actor);
+      if (!previous) {
+        return { ok: false, message: `No previous ${role} model selection to roll back to.` };
+      }
+      if (role === "brain") rebuildBrainGateway();
+      else rebuildHandsGateway();
+      return { ok: true, message: `${role} rolled back to primary=${previous.primaryId}.` };
+    },
     getVersion: () => {
       try {
-        const subject = String(execSync("git log --oneline -1", { cwd: process.cwd() })).trim();
-        const branch = String(execSync("git branch --show-current", { cwd: process.cwd() })).trim();
+        const subject = String(execSync("git log --oneline -1", { cwd: workspaceCwd })).trim();
+        const branch = String(execSync("git branch --show-current", { cwd: workspaceCwd })).trim();
         return `${subject} (${branch})`;
       } catch {
         return "version unknown (not a git repo)";
@@ -1267,7 +2000,7 @@ const main = async (): Promise<void> => {
       try {
         const output = String(
           execSync("bash deploy/update.sh true", {
-            cwd: process.cwd(),
+            cwd: workspaceCwd,
             timeout: 120_000,
             env: { ...process.env, PATH: process.env.PATH },
           }),
@@ -1296,7 +2029,7 @@ const main = async (): Promise<void> => {
         let prevVersion = "unknown";
         try {
           prevVersion = String(
-            execSync("git rev-parse --short HEAD", { cwd: process.cwd() }),
+            execSync("git rev-parse --short HEAD", { cwd: workspaceCwd }),
           ).trim();
         } catch {
           // ignore
@@ -1393,17 +2126,54 @@ const main = async (): Promise<void> => {
         const ref = vid.path ?? vid.url ?? "video";
         userContent.push({ type: "text", text: `[video attached: ${ref}]` });
       }
+      let transcriptionFailed = false;
+      const voiceTranscripts: string[] = [];
       for (const aud of message.content.audio ?? []) {
         if (aud.path) {
-          const transcript = await transcribeAudioFile(aud.path, aud.mimeType);
-          if (transcript) {
-            userContent.push({ type: "text", text: `[Voice message: ${transcript}]` });
+          const transcriptionStartedAt = Date.now();
+          const outcome = await transcribeAudioFile(aud.path, aud.mimeType);
+          recordDiagnostic("audio_transcription", outcome.stage);
+          if (outcome.stage === "ok") {
+            voiceTranscripts.push(outcome.text);
+            userContent.push({ type: "text", text: formatVoiceTranscriptForModel(outcome.text) });
+            logger.info(
+              {
+                provider: outcome.provider,
+                mimeType: aud.mimeType,
+                durationMs: Date.now() - transcriptionStartedAt,
+                transcriptChars: outcome.text.length,
+              },
+              "voice transcription completed",
+            );
           } else {
-            userContent.push({ type: "text", text: "[Voice message received — set GROQ_API_KEY or VOICE_TOOLS_OPENAI_KEY to enable transcription]" });
+            transcriptionFailed = true;
+            // Bounded, redacted: stage + provider name only, never file paths or content.
+            logger.warn(
+              {
+                channelId: message.channelId,
+                mimeType: aud.mimeType,
+                stage: outcome.stage,
+                provider: "provider" in outcome ? outcome.provider : undefined,
+                httpStatus: "status" in outcome ? outcome.status : undefined,
+              },
+              "voice transcription failed",
+            );
           }
         } else if (aud.url) {
           userContent.push({ type: "text", text: `[audio attached: ${aud.url}]` });
         }
+      }
+      // If the only thing in this message was a voice memo and transcription
+      // failed, surface a plain error to the user and skip the orchestrator.
+      // Feeding a synthetic "set GROQ_API_KEY" prompt into the agent loop
+      // makes the model burn iterations trying to self-repair its own env.
+      if (transcriptionFailed && userContent.length === 0) {
+        sourceChannel?.stopTyping(message.channelId);
+        return {
+          text:
+            "Sorry — voice transcription is unavailable right now. " +
+            "Please send a text message, or try again shortly.",
+        };
       }
       if (userContent.length === 0) {
         userContent.push({ type: "text", text: "" });
@@ -1439,24 +2209,28 @@ const main = async (): Promise<void> => {
 
       const startedAt = Date.now();
 
-      // In orchestrator mode, always use the orchestrator's model (brain).
-      // In unified mode, use the active primary model (which can be switched via /model command).
+      // In brain_hands (orchestrator) mode, the interactive conversation loop
+      // always runs on the brain role's durable selection (switchable live
+      // via "/model brain use" or the legacy "/model use" alias) — never
+      // hands', and never a static config-time model. In unified mode, use
+      // the durable primary model selection (catalog + ModelSelectionStore,
+      // switched via /model use). Both gateways are long-lived so
+      // circuit-breaker/rate-limit state persists across turns and never
+      // crosses the brain/hands role boundary.
       let activeProvider: string;
       let activeModel: string;
-      if (isOrchestratorMode) {
-        activeProvider = orchestratorProvider;
-        activeModel = orchestratorModel;
+      let activeGateway: ProviderGateway;
+      if (isOrchestratorMode && roleModelStore && brainGateway) {
+        const resolved = resolveActiveChainForRole("brain");
+        activeProvider = resolved.primary.provider;
+        activeModel = resolved.primary.model;
+        activeGateway = brainGateway;
       } else {
-        const [requestedProvider, ...modelParts] = activePrimaryModel.split("/");
-        activeProvider = providerDefaultModels.has(requestedProvider)
-          ? requestedProvider
-          : routing.defaultProvider;
-        const fallbackModel =
-          providerDefaultModels.get(activeProvider) ??
-          defaultModelForProvider(config, activeProvider);
-        activeModel = modelParts.join("/") || fallbackModel;
+        const resolved = resolveActiveChain();
+        activeProvider = resolved.primary.provider;
+        activeModel = resolved.primary.model;
+        activeGateway = primaryGateway;
       }
-      const activeGateway = buildGatewayForModel(activeProvider, activeModel);
       let streamedText = "";
 
       const result = await runAgentLoop(loopMessages, {
@@ -1473,11 +2247,22 @@ const main = async (): Promise<void> => {
           const t0 = Date.now();
           const execution = await registry.execute(name, args, {
             traceId,
-            cwd: process.cwd(),
+            cwd: workspaceCwd,
             dataDir: config.dataDir,
             logger,
             channelId: message.channelId,
+            // Enforce the same tool profile the active model was shown. In
+            // orchestrator mode this is the narrow brain/controller set; in
+            // unified mode toolDefs contains the full intended primary set.
+            allowedTools: toolDefs.map((tool) => tool.name),
           });
+          if (execution.isError) {
+            recordDiagnostic(
+              "tool_error",
+              execution.isValidationError ? "schema_error" : "execution_error",
+              { toolName: name },
+            );
+          }
           agentDb.logToolExecution(
             traceId,
             message.channelId,
@@ -1487,7 +2272,11 @@ const main = async (): Promise<void> => {
             Date.now() - t0,
             execution.isError ?? false,
           );
-          return { content: execution.content, isError: execution.isError ?? false };
+          return {
+            content: execution.content,
+            isError: execution.isError ?? false,
+            isValidationError: execution.isValidationError,
+          };
         },
         streamOpts: {
           model: activeModel,
@@ -1496,6 +2285,10 @@ const main = async (): Promise<void> => {
           temperature: isOrchestratorMode ? config.orchestratorConfig.temperature : undefined,
           maxTokens: isOrchestratorMode ? config.orchestratorConfig.maxTokens : 4096,
           timeoutMs: config.resilience.requestTimeoutMs,
+          // Only the brain role has an explicit thinking-level policy today
+          // (fast, non-thinking conversational controller); unified mode is
+          // unaffected and keeps provider-default thinking behavior.
+          thinkingLevel: isOrchestratorMode ? config.orchestratorConfig.thinkingLevel : undefined,
         },
         logger,
         metrics,
@@ -1521,13 +2314,20 @@ const main = async (): Promise<void> => {
         },
       });
 
+      for (const failure of activeGateway.getLastAttemptFailures()) {
+        recordDiagnostic("provider_attempt", failure.reason, {
+          provider: failure.provider,
+          advanced: failure.advanced,
+        });
+      }
+
       const responseText = result.text || "I could not produce a response.";
       const prepared = await pluginRunner.runBeforeSend({ text: responseText }, pluginCtx);
       const response = prepared ?? { text: "" };
       const durationMs = Date.now() - startedAt;
 
       // Persist this turn to SQLite
-      const userText = message.content.text ?? "";
+      const userText = buildPersistedUserTurn(message.content.text, voiceTranscripts);
       if (userText) agentDb.saveMessage(dbSession, message.channelId, "user", userText);
       agentDb.saveMessage(dbSession, message.channelId, "assistant", responseText);
 
@@ -1723,12 +2523,15 @@ const main = async (): Promise<void> => {
     {
       agentName: config.agentName,
       mode: config.agentMode,
-      model: isOrchestratorMode
-        ? {
-            brain: `${orchestratorProvider}/${orchestratorModel}`,
-            hands: `${executorProvider}/${executorModel}`,
-          }
-        : activePrimaryModel,
+      model:
+        isOrchestratorMode && roleModelStore
+          ? {
+              configuredBrain: `${orchestratorProvider}/${orchestratorModel}`,
+              configuredHands: `${executorProvider}/${executorModel}`,
+              resolvedBrain: `${resolveActiveChainForRole("brain").primary.provider}/${resolveActiveChainForRole("brain").primary.model}`,
+              resolvedHands: `${resolveActiveChainForRole("hands").primary.provider}/${resolveActiveChainForRole("hands").primary.model}`,
+            }
+          : modelInfoFromChain().primary,
       tools: toolDefs.map((tool) => tool.name),
       providers: providers.map((provider) => provider.name),
       channels: channelAdapters.map((channel) => channel.channelType),
@@ -1738,7 +2541,23 @@ const main = async (): Promise<void> => {
   );
 };
 
-void main().catch((error: unknown) => {
-  logger.error({ err: error }, "fatal startup error");
-  process.exit(1);
-});
+// Guard the top-level auto-run so this module can be imported (for its
+// exported pure helpers) by tests without starting the full agent — only run
+// main() when this file is executed directly (dev/production entrypoint).
+export const isEntrypointModule = (moduleUrl: string, argvPath: string | undefined): boolean => {
+  try {
+    if (!argvPath) return false;
+    return realpathSync(fileURLToPath(moduleUrl)) === realpathSync(resolve(argvPath));
+  } catch {
+    return false;
+  }
+};
+
+const isMainModule = (): boolean => isEntrypointModule(import.meta.url, process.argv[1]);
+
+if (isMainModule()) {
+  void main().catch((error: unknown) => {
+    logger.error({ err: error }, "fatal startup error");
+    process.exit(1);
+  });
+}

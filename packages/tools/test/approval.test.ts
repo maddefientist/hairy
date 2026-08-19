@@ -5,6 +5,7 @@ import {
   type ApprovalHandler,
   type ApprovalPolicy,
   DEFAULT_APPROVAL_POLICY,
+  failClosedApprovalHandler,
   interactiveApprovalHandler,
   permissiveApprovalHandler,
   strictApprovalHandler,
@@ -34,9 +35,9 @@ describe("ApprovalGate", () => {
       expect(decision).toBe("allow");
     });
 
-    it("allows web_search without approval", async () => {
+    it("allows web-search without approval", async () => {
       const gate = new ApprovalGate(DEFAULT_APPROVAL_POLICY, strictApprovalHandler, noopLogger);
-      const decision = await gate.check("web_search", { q: "test" });
+      const decision = await gate.check("web-search", { q: "test" });
 
       expect(decision).toBe("allow");
     });
@@ -229,8 +230,38 @@ describe("ApprovalGate", () => {
     });
   });
 
-  describe("interactiveApprovalHandler", () => {
-    it("logs approval need and allows", async () => {
+  describe("failClosedApprovalHandler", () => {
+    it("logs the approval need and denies (no real approval channel exists yet)", async () => {
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+      const decision = await failClosedApprovalHandler({
+        toolName: "bash",
+        args: {},
+        risk: "high",
+        reason: "destructive operation",
+      });
+
+      expect(decision).toBe("deny");
+      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("[APPROVAL REQUIRED"));
+
+      warnSpy.mockRestore();
+    });
+
+    it("denies medium risk too, since there is no way to complete an async approval", async () => {
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+      const decision = await failClosedApprovalHandler({
+        toolName: "write",
+        args: {},
+        risk: "medium",
+        reason: "config file modification",
+      });
+      expect(decision).toBe("deny");
+      warnSpy.mockRestore();
+    });
+  });
+
+  describe("interactiveApprovalHandler (deprecated alias)", () => {
+    it("is an alias of failClosedApprovalHandler and denies", async () => {
       const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
 
       const decision = await interactiveApprovalHandler({
@@ -240,8 +271,7 @@ describe("ApprovalGate", () => {
         reason: "destructive operation",
       });
 
-      expect(decision).toBe("allow");
-      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("[APPROVAL NEEDED]"));
+      expect(decision).toBe("deny");
 
       warnSpy.mockRestore();
     });

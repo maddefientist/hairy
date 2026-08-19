@@ -4,7 +4,7 @@ import type { Tool } from "../types.js";
 const fetchInputSchema = z.object({
   url: z.string().url(),
   mode: z.enum(["readable", "raw", "markdown"]).optional(),
-  maxLength: z.number().int().positive().max(100_000).optional(),
+  maxLength: z.coerce.number().int().positive().max(100_000).optional(),
 });
 
 /**

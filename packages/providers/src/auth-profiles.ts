@@ -140,14 +140,11 @@ export class AuthProfileManager {
     health.consecutiveErrors += 1;
     health.failureCounts[reason] = (health.failureCounts[reason] ?? 0) + 1;
 
-    // Only cool down the auth profile for credential-related failures (auth, rate_limit).
-    // Server and timeout errors are transient infrastructure issues handled by the circuit
-    // breaker — cooling down the profile here blocks all other models sharing the same
-    // credential, which is the wrong scope.
-    if (
-      (reason === "auth" || reason === "rate_limit") &&
-      health.consecutiveErrors >= this.cooldownThreshold
-    ) {
+    // Any repeated failure on a profile (auth, rate_limit, server, timeout) parks it
+    // in cooldown so getAvailable() rotates to a healthier profile/credential. The
+    // circuit breaker (provider-scoped) handles broader outage detection separately;
+    // this cooldown is profile-scoped so multi-key setups fail over between keys.
+    if (health.consecutiveErrors >= this.cooldownThreshold) {
       const exponent = health.consecutiveErrors - this.cooldownThreshold;
       const cooldownMs = Math.min(this.baseCooldownMs * 2 ** exponent, this.maxCooldownMs);
       health.cooldownUntil = now + cooldownMs;
@@ -173,11 +170,17 @@ export class AuthProfileManager {
     if (!profile) return false;
 
     if (typeof credential !== "string" || credential.trim().length === 0) {
-      this.logger.warn({ profileId: profileId.slice(0, 8) }, "refreshCredential rejected: empty credential");
+      this.logger.warn(
+        { profileId: profileId.slice(0, 8) },
+        "refreshCredential rejected: empty credential",
+      );
       return false;
     }
     if (expiresAt !== undefined && (!Number.isFinite(expiresAt) || expiresAt <= Date.now())) {
-      this.logger.warn({ profileId: profileId.slice(0, 8) }, "refreshCredential rejected: invalid or expired expiresAt");
+      this.logger.warn(
+        { profileId: profileId.slice(0, 8) },
+        "refreshCredential rejected: invalid or expired expiresAt",
+      );
       return false;
     }
 
@@ -239,7 +242,10 @@ export class AuthProfileManager {
     };
 
     await mkdir(dirname(this.opts.filePath), { recursive: true, mode: 0o700 });
-    await writeFile(this.opts.filePath, JSON.stringify(state, null, 2), { encoding: "utf8", mode: 0o600 });
+    await writeFile(this.opts.filePath, JSON.stringify(state, null, 2), {
+      encoding: "utf8",
+      mode: 0o600,
+    });
   }
 
   async load(): Promise<void> {

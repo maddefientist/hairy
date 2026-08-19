@@ -11,9 +11,11 @@ max_iterations_per_run = 25
 [health]
 port = 9090
 
-[providers.anthropic]
-enabled = true
-default_model = "claude-sonnet-4-20250514"
+[providers.supergrok]
+enabled = false
+base_url = "https://api.x.ai/v1"
+auth_file = "./data/providers/supergrok-auth.json"
+default_model = "grok-4.6"
 
 [providers.ollama]
 enabled = true
@@ -26,11 +28,11 @@ default_model = "gemini-2.5-flash"
 
 [providers.openrouter]
 enabled = false
-default_model = "anthropic/claude-sonnet-4-20250514"
+default_model = "openai/gpt-oss-120b"
 
 [routing]
 default_provider = "ollama"
-fallback_chain = ["ollama", "anthropic", "gemini"]
+fallback_chain = ["ollama", "supergrok", "gemini"]
 
 [routing.cost]
 track = true

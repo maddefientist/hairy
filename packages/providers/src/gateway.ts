@@ -1,11 +1,12 @@
 import type { Metrics } from "@hairyclaw/observability";
 import type { AuthProfile, AuthProfileManager } from "./auth-profiles.js";
 import { CircuitBreakerRegistry } from "./circuit-breaker.js";
-import type { CircuitBreakerOptions } from "./circuit-breaker.js";
-import { classifyError } from "./error-classifier.js";
-import { ModelRouter } from "./router.js";
+import type { CircuitBreakerOptions, CircuitState } from "./circuit-breaker.js";
+import { ADVANCING_FAILOVER_REASONS, classifyError } from "./error-classifier.js";
+import type { FailoverReason } from "./error-classifier.js";
 import { RateLimitTracker } from "./rate-limit-tracker.js";
 import type { RateLimitSnapshot } from "./rate-limit-tracker.js";
+import { ModelRouter } from "./router.js";
 import type {
   Provider,
   ProviderMessage,
@@ -28,6 +29,12 @@ interface ProviderGatewayOptions {
   credentialRefresher?: CredentialRefresher;
   /** Requests-remaining threshold below which a provider is considered exhausted (default: 5) */
   rateLimitExhaustionThreshold?: number;
+  /**
+   * Max credential-refresh retries across a single stream() call (bounded
+   * retry — see MAX_PROVIDER_RETRIES_PER_ATTEMPT in @hairyclaw/core, the
+   * single source of truth callers should pass through here). Default: 2.
+   */
+  maxCredentialRefreshes?: number;
 }
 
 interface StreamAttempt {
@@ -36,14 +43,29 @@ interface StreamAttempt {
   timeoutMs: number;
 }
 
-const DEFAULT_TIMEOUT_MS = 120_000;
+/** A single failed attempt, typed by classification reason, for /model test and /debug surfaces. */
+export interface AttemptFailure {
+  provider: string;
+  model: string;
+  reason: FailoverReason;
+  message: string;
+  advanced: boolean;
+  at: number;
+}
 
+const DEFAULT_TIMEOUT_MS = 120_000;
+const MAX_TRACKED_ATTEMPT_FAILURES = 20;
 
 export class ProviderGateway {
   private readonly providers = new Map<string, Provider>();
   private readonly router: ModelRouter;
   private readonly circuits: CircuitBreakerRegistry;
   private readonly rateLimits: RateLimitTracker;
+  private readonly maxCredentialRefreshes: number;
+  private lastAttemptFailures: AttemptFailure[] = [];
+  private lastSuccessfulAttempt:
+    | { provider: string; model: string; at: number; latencyMs: number }
+    | undefined;
 
   constructor(private readonly opts: ProviderGatewayOptions) {
     for (const provider of opts.providers) {
@@ -52,6 +74,7 @@ export class ProviderGateway {
     this.router = new ModelRouter(opts.routingConfig);
     this.circuits = new CircuitBreakerRegistry(opts.circuitBreaker);
     this.rateLimits = new RateLimitTracker(opts.rateLimitExhaustionThreshold);
+    this.maxCredentialRefreshes = opts.maxCredentialRefreshes ?? 2;
   }
 
   async *stream(
@@ -60,6 +83,7 @@ export class ProviderGateway {
   ): AsyncIterable<StreamEvent> {
     const routed = this.router.route(opts.route ?? {});
     const attempts = this.buildAttempts(routed.provider, routed.model, opts);
+    this.lastAttemptFailures = [];
 
     if (attempts.length === 0) {
       yield { type: "error", error: "provider or model unavailable" };
@@ -72,7 +96,6 @@ export class ProviderGateway {
     const seenCredentials = new Set<string>();
     let qi = 0;
     let totalRefreshes = 0;
-    const MAX_REFRESHES = 2;
 
     while (qi < queue.length) {
       const attempt = queue[qi++];
@@ -86,7 +109,9 @@ export class ProviderGateway {
 
       const circuit = this.circuits.get(attempt.provider);
       if (!circuit.isCallAllowed()) {
-        failures.push(`${attemptLabel}: circuit open (${Math.ceil(circuit.remainingCooldownMs / 1000)}s remaining)`);
+        failures.push(
+          `${attemptLabel}: circuit open (${Math.ceil(circuit.remainingCooldownMs / 1000)}s remaining)`,
+        );
         continue;
       }
 
@@ -106,6 +131,7 @@ export class ProviderGateway {
 
       if (profile?.credential) seenCredentials.add(profile.credential);
 
+      const attemptStartedAt = Date.now();
       let hadError = false;
       let errorReason = "unknown provider failure";
 
@@ -117,10 +143,16 @@ export class ProviderGateway {
           ...(profile?.type === "api_key" ? { credential: profile.credential } : {}),
         };
 
-        for await (const event of this.streamWithTimeout(provider.stream(messages, streamOpts), attempt.timeoutMs)) {
+        for await (const event of this.streamWithTimeout(
+          provider.stream(messages, streamOpts),
+          attempt.timeoutMs,
+        )) {
           if (event.type === "error") {
             hadError = true;
-            errorReason = this.sanitizeErrorMessage(event.error ?? "provider returned error", ...seenCredentials);
+            errorReason = this.sanitizeErrorMessage(
+              event.error ?? "provider returned error",
+              ...seenCredentials,
+            );
             this.opts.metrics.increment("llm_requests", 1, {
               provider: attempt.provider,
               model: attempt.model,
@@ -132,7 +164,11 @@ export class ProviderGateway {
           // Consume rate limit headers — update tracker, don't forward to caller
           if (event.type === "rate_limit_headers") {
             if (event.rateLimitRemaining !== undefined && event.rateLimitResetAtMs !== undefined) {
-              this.rateLimits.update(attempt.provider, event.rateLimitRemaining, event.rateLimitResetAtMs);
+              this.rateLimits.update(
+                attempt.provider,
+                event.rateLimitRemaining,
+                event.rateLimitResetAtMs,
+              );
             }
             continue;
           }
@@ -178,7 +214,7 @@ export class ProviderGateway {
           this.opts.credentialRefresher &&
           this.opts.authProfiles &&
           !refreshedProfiles.has(profile.id) &&
-          totalRefreshes < MAX_REFRESHES
+          totalRefreshes < this.maxCredentialRefreshes
         ) {
           const refreshed = await this.opts.credentialRefresher(profile).catch(() => null);
           if (refreshed) {
@@ -201,7 +237,25 @@ export class ProviderGateway {
         circuit.recordFailure();
         failures.push(`${attemptLabel}: ${errorReason}`);
         if (profile && this.opts.authProfiles) {
-          this.opts.authProfiles.reportFailure(profile.id, classified.reason === "auth_failure" ? "auth" : classified.reason === "rate_limit" ? "rate_limit" : "server");
+          this.opts.authProfiles.reportFailure(
+            profile.id,
+            classified.reason === "auth_failure"
+              ? "auth"
+              : classified.reason === "rate_limit"
+                ? "rate_limit"
+                : "server",
+          );
+        }
+
+        const advances = ADVANCING_FAILOVER_REASONS.has(classified.reason);
+        this.recordAttemptFailure(attempt, classified.reason, errorReason, advances);
+
+        if (!advances) {
+          // Fail closed: auth, schema, configuration, and unclassified failures are not
+          // transient — retrying a different provider/model won't fix a bad credential,
+          // a malformed request, or a missing configuration entry, and silently trying
+          // the rest of the chain would mask the real problem. Stop here and surface it.
+          break;
         }
         continue;
       }
@@ -217,6 +271,13 @@ export class ProviderGateway {
         this.opts.authProfiles.reportSuccess(profile.id);
       }
 
+      this.lastSuccessfulAttempt = {
+        provider: attempt.provider,
+        model: attempt.model,
+        at: Date.now(),
+        latencyMs: Date.now() - attemptStartedAt,
+      };
+
       return;
     }
 
@@ -226,6 +287,52 @@ export class ProviderGateway {
 
   selectProvider(intent?: RouteRequest): { provider: string; model: string | undefined } {
     return this.router.route(intent ?? {});
+  }
+
+  /**
+   * The provider/model pair that most recently actually completed a
+   * successful stream() call on this gateway instance, if any — distinct
+   * from the *configured* primary, which may never have been attempted or
+   * may currently be failing over. `undefined` means no successful call has
+   * completed yet on this gateway (e.g. right after a rebuild triggered by
+   * /model use).
+   */
+  getLastSuccessfulAttempt():
+    | { provider: string; model: string; at: number; latencyMs: number }
+    | undefined {
+    return this.lastSuccessfulAttempt ? { ...this.lastSuccessfulAttempt } : undefined;
+  }
+
+  /** Typed failures from the most recent stream() call, most recent last. */
+  getLastAttemptFailures(): AttemptFailure[] {
+    return [...this.lastAttemptFailures];
+  }
+
+  /** Circuit breaker state per provider, safe to expose in /model status and /debug. */
+  getCircuitState(): Record<
+    string,
+    { state: CircuitState; failures: number; remainingCooldownMs: number }
+  > {
+    return this.circuits.snapshot();
+  }
+
+  private recordAttemptFailure(
+    attempt: StreamAttempt,
+    reason: FailoverReason,
+    message: string,
+    advanced: boolean,
+  ): void {
+    this.lastAttemptFailures.push({
+      provider: attempt.provider,
+      model: attempt.model,
+      reason,
+      message,
+      advanced,
+      at: Date.now(),
+    });
+    if (this.lastAttemptFailures.length > MAX_TRACKED_ATTEMPT_FAILURES) {
+      this.lastAttemptFailures = this.lastAttemptFailures.slice(-MAX_TRACKED_ATTEMPT_FAILURES);
+    }
   }
 
   getUsage(): ReturnType<Metrics["getAll"]> {
@@ -271,21 +378,12 @@ export class ProviderGateway {
       return [];
     }
 
-    const providers = [
-      routedProvider,
-      ...this.opts.routingConfig.fallbackChain.filter((name) => name !== routedProvider),
-    ];
-
-    const deduped: StreamAttempt[] = [];
-    const seen = new Set<string>();
-    for (const provider of providers) {
-      const key = `${provider}/${selectedModel}`;
-      if (seen.has(key)) continue;
-      seen.add(key);
-      deduped.push({ provider, model: selectedModel, timeoutMs });
-    }
-
-    return deduped;
+    // No explicit modelFallbackChain: attempt only the selected provider/model
+    // pair, exactly as chosen. We deliberately do NOT fan this model id out
+    // across routingConfig.fallbackChain's other providers — a model id is
+    // never portable across providers, so cross-provider fallback requires an explicit
+    // modelFallbackChain of real {provider, model} pairs.
+    return [{ provider: routedProvider, model: selectedModel, timeoutMs }];
   }
 
   private sanitizeErrorMessage(message: string, ...credentials: Array<string | undefined>): string {

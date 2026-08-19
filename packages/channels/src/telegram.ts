@@ -21,7 +21,11 @@ interface TelegramBaseOpts {
   /** Data root for downloaded media. Defaults to <cwd>/data */
   dataDir?: string;
   logger: Logger;
+  /** Timeout for inbound media downloads (default: 30s). Prevents a hung fetch from blocking message handling. */
+  mediaDownloadTimeoutMs?: number;
 }
+
+const DEFAULT_MEDIA_DOWNLOAD_TIMEOUT_MS = 30_000;
 
 interface TelegramBotOpts extends TelegramBaseOpts {
   mode: "bot";
@@ -346,6 +350,8 @@ export class TelegramAdapter extends BaseAdapter {
   private bot: Bot | null = null;
   private mtprotoClient: TelegramClient | null = null;
   private readonly dataDir: string;
+  private shuttingDown = false;
+  private botRunner: Promise<void> | null = null;
 
   constructor(private readonly opts: TelegramOpts) {
     super();
@@ -368,44 +374,88 @@ export class TelegramAdapter extends BaseAdapter {
       throw new Error("connectBot called with non-bot options");
     }
 
-    const opts = this.opts;
-    const bot = new Bot(opts.botToken);
-    this.bot = bot;
+    this.shuttingDown = false;
+    // this.connected is set to true only once bot.start()'s onStart fires
+    // (long-polling is actually live) — not here. Claiming "connected" before
+    // polling starts, or while runBotLoop() is backing off after a crash,
+    // would be a false positive for /health and /debug.
+    this.botRunner = this.runBotLoop();
 
-    bot.catch((err) => {
-      const e = err.error;
-      if (e instanceof GrammyError) {
-        this.opts.logger.error(
-          { code: e.error_code, description: e.description },
-          "telegram api error",
-        );
-      } else if (e instanceof HttpError) {
-        this.opts.logger.error({ err: e }, "telegram http error");
-      } else {
-        this.opts.logger.error({ err: e }, "telegram unknown error");
-      }
-    });
-
-    bot.on("message", (ctx) => {
-      void this.handleBotMessage(ctx);
-    });
-
-    bot
-      .start({
-        drop_pending_updates: true,
-        onStart: (me) => {
-          this.opts.logger.info({ username: me.username, id: me.id }, "telegram bot started");
-        },
-      })
-      .catch((err: unknown) => {
-        this.opts.logger.error({ err }, "telegram bot crashed");
-      });
-
-    this.connected = true;
     this.opts.logger.info(
       { allowedChatIds: this.opts.allowedChatIds, mode: "bot" },
-      "telegram adapter connected",
+      "telegram adapter connecting",
     );
+  }
+
+  private async runBotLoop(): Promise<void> {
+    if (this.opts.mode !== "bot") return;
+    const opts = this.opts;
+    let attempt = 0;
+
+    while (!this.shuttingDown) {
+      const bot = new Bot(opts.botToken);
+      this.bot = bot;
+
+      bot.catch((err) => {
+        const e = err.error;
+        if (e instanceof GrammyError) {
+          this.opts.logger.error(
+            { code: e.error_code, description: e.description },
+            "telegram api error",
+          );
+        } else if (e instanceof HttpError) {
+          this.opts.logger.error({ err: e }, "telegram http error");
+        } else {
+          this.opts.logger.error({ err: e }, "telegram unknown error");
+        }
+      });
+
+      bot.on("message", (ctx) => {
+        void this.handleBotMessage(ctx);
+      });
+
+      try {
+        await bot.start({
+          drop_pending_updates: true,
+          onStart: (me) => {
+            attempt = 0;
+            this.connected = true;
+            this.opts.logger.info({ username: me.username, id: me.id }, "telegram bot started");
+          },
+        });
+        // bot.start() resolves when bot.stop() is called — clean exit.
+        this.connected = false;
+        return;
+      } catch (err: unknown) {
+        // Polling is not live once we're here — never report "connected"
+        // while backing off, even if a previous onStart had fired.
+        this.connected = false;
+
+        if (this.shuttingDown) return;
+
+        const isConflict = err instanceof GrammyError && err.error_code === 409;
+        attempt += 1;
+        // 409 needs ≥ Telegram long-poll TTL to release; everything else uses
+        // exponential backoff capped at 60s.
+        const delayMs = isConflict
+          ? Math.min(60_000, 30_000 + attempt * 5_000)
+          : Math.min(60_000, 1_000 * 2 ** Math.min(attempt, 6));
+
+        this.opts.logger.error(
+          { err, attempt, delayMs, conflict: isConflict },
+          "telegram bot crashed; reconnecting",
+        );
+
+        try {
+          await bot.stop();
+        } catch {
+          // ignore — bot already dead
+        }
+        this.bot = null;
+
+        await new Promise((resolve) => setTimeout(resolve, delayMs));
+      }
+    }
   }
 
   private async handleBotMessage(ctx: Context): Promise<void> {
@@ -479,11 +529,15 @@ export class TelegramAdapter extends BaseAdapter {
       const outPath = join(dir, `${Date.now()}-${fileName}`);
 
       const downloadUrl = `https://api.telegram.org/file/bot${this.opts.botToken}/${file.file_path}`;
-      const response = await fetch(downloadUrl);
+      const response = await fetch(downloadUrl, {
+        signal: AbortSignal.timeout(
+          this.opts.mediaDownloadTimeoutMs ?? DEFAULT_MEDIA_DOWNLOAD_TIMEOUT_MS,
+        ),
+      });
       if (!response.ok) {
         this.opts.logger.warn(
           { fileId, status: response.status },
-          "telegram media download failed",
+          "telegram media download failed: non-2xx response",
         );
         return null;
       }
@@ -498,8 +552,12 @@ export class TelegramAdapter extends BaseAdapter {
         fileName,
       };
     } catch (error: unknown) {
+      // Bounded, redacted: never log the raw error message here — the
+      // download URL embeds the bot token, and some fetch implementations
+      // surface the URL inside thrown error messages/causes.
+      const isTimeout = error instanceof Error && error.name === "TimeoutError";
       this.opts.logger.warn(
-        { fileId, error: error instanceof Error ? error.message : String(error) },
+        { fileId, stage: isTimeout ? "timeout" : "exception" },
         "telegram media download threw",
       );
       return null;
@@ -720,9 +778,18 @@ export class TelegramAdapter extends BaseAdapter {
     }
     this.typingIntervals.clear();
 
+    this.shuttingDown = true;
     if (this.bot) {
       await this.bot.stop();
       this.bot = null;
+    }
+    if (this.botRunner) {
+      try {
+        await this.botRunner;
+      } catch {
+        // runner shouldn't throw, but never let disconnect raise
+      }
+      this.botRunner = null;
     }
 
     if (this.mtprotoClient) {

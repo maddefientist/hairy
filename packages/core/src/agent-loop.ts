@@ -12,6 +12,10 @@
 
 import type { HairyClawLogger, Metrics } from "@hairyclaw/observability";
 import type { IterationBudget } from "./iteration-budget.js";
+import {
+  MAX_COMPRESSION_RETRIES_PER_ITERATION,
+  PRIMARY_MAX_ITERATIONS,
+} from "./iteration-limits.js";
 import type { PluginContext, PluginRunner } from "./plugin.js";
 import type { ToolCallRecord } from "./types.js";
 
@@ -40,7 +44,7 @@ export interface AgentLoopContent {
   text?: string;
   image?: { data: Buffer; mimeType: string } | { url: string };
   toolCall?: { id: string; name: string; args: unknown };
-  toolResult?: { id: string; content: string; isError?: boolean };
+  toolResult?: { id: string; content: string; isError?: boolean; isValidationError?: boolean };
 }
 
 export interface AgentLoopToolDef {
@@ -86,7 +90,7 @@ export type ToolExecutor = (
   name: string,
   args: unknown,
   toolCallId: string,
-) => Promise<{ content: string; isError: boolean }>;
+) => Promise<{ content: string; isError: boolean; isValidationError?: boolean }>;
 
 export interface AgentLoopOptions {
   provider: AgentLoopProvider;
@@ -100,6 +104,12 @@ export interface AgentLoopOptions {
   maxIterations?: number;
   /** Per-agent iteration budget — takes precedence over maxIterations when provided */
   budget?: IterationBudget;
+  /**
+   * Optional wall-clock budget for the whole loop. The deadline is enforced
+   * before every model and tool step, and the remaining time caps each model
+   * stream timeout. An already-running tool retains its own bounded timeout.
+   */
+  maxDurationMs?: number;
   /** Context compressor — compresses conversation before each LLM call when approaching limit */
   compressor?: CompressorLike;
   /** LLM context window size for compressor threshold calculation (default: 200_000) */
@@ -148,7 +158,11 @@ export const runAgentLoop = async (
   messages: AgentLoopMessage[],
   opts: AgentLoopOptions,
 ): Promise<AgentLoopResult> => {
-  const maxIter = opts.maxIterations ?? 10;
+  const maxIter = opts.maxIterations ?? PRIMARY_MAX_ITERATIONS;
+  const startedAt = Date.now();
+  const deadlineAt = opts.maxDurationMs ? startedAt + opts.maxDurationMs : undefined;
+  const remainingDurationMs = (): number | undefined =>
+    deadlineAt === undefined ? undefined : Math.max(0, deadlineAt - Date.now());
   const conversation = [...messages];
   const allToolCalls: ToolCallRecord[] = [];
   const totalUsage = { input: 0, output: 0, costUsd: 0 };
@@ -156,8 +170,19 @@ export const runAgentLoop = async (
 
   let finalText = "";
   let iterations = 0;
+  let consecutiveToolErrorIterations = 0;
+  let consecutiveValidationErrorIterations = 0;
+  let successfulToolCallCount = 0;
 
   outer: for (let i = 0; i < maxIter; i++) {
+    if (remainingDurationMs() === 0) {
+      finalText = "I reached the bounded execution time limit and stopped safely.";
+      opts.logger.warn(
+        { maxDurationMs: opts.maxDurationMs },
+        "agent loop duration budget exhausted",
+      );
+      break;
+    }
     // Check external budget first (overrides raw iteration counter)
     if (opts.budget) {
       if (!opts.budget.consume()) {
@@ -165,8 +190,7 @@ export const runAgentLoop = async (
           { used: opts.budget.used, max: opts.budget.maxTotal },
           "agent loop iteration budget exhausted",
         );
-        finalText =
-          "I reached my iteration budget. Here's what I have so far.";
+        finalText = "I reached my iteration budget. Here's what I have so far.";
         break;
       }
     }
@@ -178,7 +202,10 @@ export const runAgentLoop = async (
       const ctxWindow = opts.contextWindow ?? 200_000;
       const pressure = opts.compressor.pressureLevel?.(conversation, ctxWindow) ?? 0;
       if (pressure >= 0.85) {
-        opts.logger.warn({ pressureLevel: pressure.toFixed(2) }, "context pressure high — may hit limit soon");
+        opts.logger.warn(
+          { pressureLevel: pressure.toFixed(2) },
+          "context pressure high — may hit limit soon",
+        );
       }
       if (opts.compressor.needsCompression(conversation, ctxWindow)) {
         const compressed = await opts.compressor.compress(conversation, ctxWindow);
@@ -190,6 +217,7 @@ export const runAgentLoop = async (
     }
 
     let retryAfterModel = false;
+    let compressionRetries = 0;
     let turnText = "";
     let pendingCalls = new Map<string, PendingToolCall>();
 
@@ -200,7 +228,17 @@ export const runAgentLoop = async (
       let modelErrorMessage = "unknown model error";
 
       let streamMessages = conversation;
-      let streamOpts = opts.streamOpts;
+      const remainingBeforeModel = remainingDurationMs();
+      let streamOpts =
+        remainingBeforeModel === undefined
+          ? opts.streamOpts
+          : {
+              ...opts.streamOpts,
+              timeoutMs: Math.max(
+                1,
+                Math.min(opts.streamOpts.timeoutMs ?? remainingBeforeModel, remainingBeforeModel),
+              ),
+            };
 
       if (opts.plugins && pluginCtx) {
         const transformed = await opts.plugins.runBeforeModel(
@@ -281,12 +319,19 @@ export const runAgentLoop = async (
       if (hadModelError) {
         opts.logger.error({ error: modelErrorMessage }, "agent loop provider error");
 
-        // Context-length exceeded: force compression and retry this iteration
+        // Context-length exceeded: force compression and retry this iteration,
+        // bounded so a compressor that can't shrink below the provider limit
+        // can't spin this turn forever without ever advancing the outer loop.
         if (
           opts.compressor &&
-          modelErrorMessage.startsWith("context_length_exceeded:")
+          modelErrorMessage.startsWith("context_length_exceeded:") &&
+          compressionRetries < MAX_COMPRESSION_RETRIES_PER_ITERATION
         ) {
-          opts.logger.warn("context length exceeded — forcing compression before retry");
+          compressionRetries++;
+          opts.logger.warn(
+            { compressionRetries, maxCompressionRetries: MAX_COMPRESSION_RETRIES_PER_ITERATION },
+            "context length exceeded — forcing compression before retry",
+          );
           const ctxWindow = opts.contextWindow ?? 200_000;
           const compressed = await opts.compressor.compress(conversation, ctxWindow);
           if (compressed.wasCompressed) {
@@ -357,6 +402,14 @@ export const runAgentLoop = async (
     const toolResultContent: AgentLoopContent[] = [];
 
     for (const [, call] of pendingCalls) {
+      if (remainingDurationMs() === 0) {
+        finalText = "I reached the bounded execution time limit and stopped safely.";
+        opts.logger.warn(
+          { maxDurationMs: opts.maxDurationMs, toolName: call.name },
+          "agent loop duration budget exhausted before tool execution",
+        );
+        break outer;
+      }
       const argsStr = call.argsChunks.join("");
       let parsedArgs: unknown;
       try {
@@ -411,7 +464,7 @@ export const runAgentLoop = async (
       opts.onToolStart?.(call.name, call.id);
       const startedAt = Date.now();
 
-      let toolResult: { content: string; isError: boolean };
+      let toolResult: { content: string; isError: boolean; isValidationError?: boolean };
       try {
         toolResult = await opts.executor(call.name, parsedArgs, call.id);
       } catch (error: unknown) {
@@ -441,6 +494,7 @@ export const runAgentLoop = async (
         toolResult = {
           content: afterTool.result,
           isError: afterTool.isError,
+          isValidationError: toolResult.isValidationError,
         };
       }
 
@@ -463,6 +517,10 @@ export const runAgentLoop = async (
         status: toolResult.isError ? "error" : "ok",
       });
 
+      if (!toolResult.isError) {
+        successfulToolCallCount += 1;
+      }
+
       allToolCalls.push({
         toolName: call.name,
         args: parsedArgs,
@@ -477,8 +535,55 @@ export const runAgentLoop = async (
           id: call.id,
           content: toolResult.content,
           isError: toolResult.isError,
+          isValidationError: toolResult.isValidationError,
         },
       });
+    }
+
+    const allToolsErrored =
+      toolResultContent.length > 0 &&
+      toolResultContent.every((item) => item.toolResult?.isError === true);
+    // Validation errors are recoverable: the model gets the parse message and
+    // can correct its arguments next iteration. Don't let them trip the
+    // circuit-breaker — only execution failures count toward the streak.
+    const allErrorsAreValidation =
+      allToolsErrored &&
+      toolResultContent.every((item) => item.toolResult?.isValidationError === true);
+
+    if (allToolsErrored && !allErrorsAreValidation) {
+      consecutiveToolErrorIterations += 1;
+    } else if (!allToolsErrored) {
+      consecutiveToolErrorIterations = 0;
+    }
+    // If all errors were validation errors, leave the streak counter unchanged
+    // (don't reset it either — we still don't want infinite validation loops).
+
+    // Independently bound validation-error retries so we eventually stop if the
+    // model can't produce valid args after several tries.
+    if (allErrorsAreValidation) {
+      consecutiveValidationErrorIterations += 1;
+    } else {
+      consecutiveValidationErrorIterations = 0;
+    }
+
+    if (successfulToolCallCount === 0 && consecutiveToolErrorIterations >= 3) {
+      finalText =
+        "I hit repeated tool errors and stopped instead of looping. Please check the requested action or tool permissions.";
+      opts.logger.warn(
+        { iteration: iterations, consecutiveToolErrorIterations },
+        "agent loop stopped after repeated tool errors",
+      );
+      break;
+    }
+
+    if (successfulToolCallCount === 0 && consecutiveValidationErrorIterations >= 5) {
+      finalText =
+        "I kept producing tool calls with invalid arguments and stopped to avoid looping. The tool schemas may be incompatible with this model.";
+      opts.logger.warn(
+        { iteration: iterations, consecutiveValidationErrorIterations },
+        "agent loop stopped after repeated validation errors",
+      );
+      break;
     }
 
     // Append assistant message (with tool calls) and user message (with results)

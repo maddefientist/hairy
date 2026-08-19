@@ -12,9 +12,9 @@ import type { Tool } from "../types.js";
 
 const memoryRecallSchema = z.object({
   query: z.string().min(1).max(2000),
-  top_k: z.number().int().positive().max(20).optional(),
+  top_k: z.coerce.number().int().positive().max(20).optional(),
   memory_type: z.enum(MEMORY_TYPES).optional(),
-  max_staleness: z.number().min(0).max(1).optional(),
+  max_staleness: z.coerce.number().min(0).max(1).optional(),
 });
 
 const formatResults = (items: SearchResult[]): string => {
