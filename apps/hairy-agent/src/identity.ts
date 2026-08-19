@@ -78,6 +78,7 @@ export const buildSystemPrompt = async (opts: SystemPromptOptions): Promise<stri
     "- Keep responses concise by default unless depth is explicitly requested.",
     "- Avoid AI disclaimers and meta talk unless directly relevant.",
     "- If asked directly, do not falsely claim to be human.",
+    "- Text labeled 'Voice transcript (authoritative user speech)' is the user's successfully transcribed spoken input. Respond to the words directly. If modality matters, say the voice note was transcribed; do not claim raw-audio listening or that the input was unavailable.",
     "- Learn user preferences from repeated signals and store durable ones in memory.",
     "",
     "## Tool Usage Strategy",

@@ -775,6 +775,17 @@ export type TranscriptionOutcome =
   | { stage: "exception"; provider: string }
   | { stage: "empty_transcript"; provider: string };
 
+export const formatVoiceTranscriptForModel = (text: string): string =>
+  `[Voice transcript (authoritative user speech): ${text}]`;
+
+export const buildPersistedUserTurn = (
+  text: string | undefined,
+  voiceTranscripts: string[],
+): string =>
+  [text?.trim(), ...voiceTranscripts.map((transcript) => formatVoiceTranscriptForModel(transcript))]
+    .filter((part): part is string => Boolean(part))
+    .join("\n\n");
+
 const transcribeAudioFile = async (
   filePath: string,
   mimeType: string,
@@ -2089,12 +2100,24 @@ const main = async (): Promise<void> => {
         userContent.push({ type: "text", text: `[video attached: ${ref}]` });
       }
       let transcriptionFailed = false;
+      const voiceTranscripts: string[] = [];
       for (const aud of message.content.audio ?? []) {
         if (aud.path) {
+          const transcriptionStartedAt = Date.now();
           const outcome = await transcribeAudioFile(aud.path, aud.mimeType);
           recordDiagnostic("audio_transcription", outcome.stage);
           if (outcome.stage === "ok") {
-            userContent.push({ type: "text", text: `[Voice message: ${outcome.text}]` });
+            voiceTranscripts.push(outcome.text);
+            userContent.push({ type: "text", text: formatVoiceTranscriptForModel(outcome.text) });
+            logger.info(
+              {
+                provider: outcome.provider,
+                mimeType: aud.mimeType,
+                durationMs: Date.now() - transcriptionStartedAt,
+                transcriptChars: outcome.text.length,
+              },
+              "voice transcription completed",
+            );
           } else {
             transcriptionFailed = true;
             // Bounded, redacted: stage + provider name only, never file paths or content.
@@ -2273,7 +2296,7 @@ const main = async (): Promise<void> => {
       const durationMs = Date.now() - startedAt;
 
       // Persist this turn to SQLite
-      const userText = message.content.text ?? "";
+      const userText = buildPersistedUserTurn(message.content.text, voiceTranscripts);
       if (userText) agentDb.saveMessage(dbSession, message.channelId, "user", userText);
       agentDb.saveMessage(dbSession, message.channelId, "assistant", responseText);
 

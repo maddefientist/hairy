@@ -3,7 +3,26 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
-import { isEntrypointModule, parseModelSpec } from "../src/main.js";
+import {
+  buildPersistedUserTurn,
+  formatVoiceTranscriptForModel,
+  isEntrypointModule,
+  parseModelSpec,
+} from "../src/main.js";
+
+describe("voice transcript contract", () => {
+  it("labels successful speech as authoritative input and persists voice-only turns", () => {
+    expect(formatVoiceTranscriptForModel("Check the server.")).toBe(
+      "[Voice transcript (authoritative user speech): Check the server.]",
+    );
+    expect(buildPersistedUserTurn(undefined, ["Check the server."])).toContain(
+      "authoritative user speech",
+    );
+    expect(buildPersistedUserTurn("A caption", ["Spoken detail"])).toBe(
+      "A caption\n\n[Voice transcript (authoritative user speech): Spoken detail]",
+    );
+  });
+});
 
 describe("parseModelSpec", () => {
   it("rejects empty and incomplete model specs", () => {

@@ -18,6 +18,8 @@ describe("buildSystemPrompt tool guidance", () => {
     expect(prompt).toContain("Delegate coding, system design, debugging");
     expect(prompt).not.toContain("Use bash for system operations");
     expect(prompt).not.toContain("Use read to examine files");
+    expect(prompt).toContain("Voice transcript (authoritative user speech)");
+    expect(prompt).toContain("the voice note was transcribed");
   });
 
   it("keeps execution guidance when those tools are actually exposed", async () => {
